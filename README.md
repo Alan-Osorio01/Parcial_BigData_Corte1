@@ -154,8 +154,6 @@ El flujo de despliegue es **completamente automático** al realizar un `push` a 
 
 ## Continuous Deployment (CD)
 
-<<<<<<< HEAD
-- Ana Amador 
 =======
 1. Conexión vía **SSH** a las instancias **EC2**
 2. Actualización del código (`git pull`)
