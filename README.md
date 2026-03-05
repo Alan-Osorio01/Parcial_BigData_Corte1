@@ -1,4 +1,3 @@
-arregla este readme que queede bonito y bien 
 # 🎵 Chinook Music Store
 
 Gestión y compra de canciones en línea, basada en la base de datos **Chinook**, desplegada en **AWS** con pipeline de CI/CD automatizado.
