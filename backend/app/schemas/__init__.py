@@ -53,3 +53,12 @@ class InvoiceSchema(BaseModel):
     total: Decimal
     class Config:
         from_attributes = True
+
+class RegisterSchema(BaseModel):
+    email: EmailStr
+    password: str
+    role: Optional[str] = "usuario"
+
+class LoginSchema(BaseModel):
+    email: EmailStr
+    password: str

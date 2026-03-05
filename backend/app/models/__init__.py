@@ -57,3 +57,14 @@ class InvoiceLine(Base):
     quantity = Column(Integer)
     invoice = relationship("Invoice", back_populates="lines")
     track = relationship("Track")
+# ── AUTENTICACIÓN ─────────────────────────────────────
+from datetime import datetime
+from sqlalchemy import Column, Integer, String, DateTime
+
+class User(Base):
+    __tablename__ = "users"
+    user_id    = Column(Integer, primary_key=True, index=True)
+    email      = Column(String(100), unique=True, nullable=False)
+    password   = Column(String(255), nullable=False)
+    role       = Column(String(20), default="usuario")
+    created_at = Column(DateTime, default=datetime.utcnow)
