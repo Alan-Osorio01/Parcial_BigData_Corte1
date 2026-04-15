@@ -2,6 +2,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.routers import router
+from app.database import engine, Base
+import app.models  # noqa: F401 — registra todos los modelos antes del create_all
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Chinook Music Store API",

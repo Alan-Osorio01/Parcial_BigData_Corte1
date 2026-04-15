@@ -107,12 +107,14 @@ from app.models import Customer
 
 @router.get("/customers/me", tags=["customers"])
 def my_customer(db: Session = Depends(get_db), current_user: User = Depends(auth_module.get_current_user)):
+    from sqlalchemy import func
     customer = db.query(Customer).filter(Customer.email == current_user.email).first()
     if not customer:
-        # Crear cliente a partir del email del usuario registrado
         raw = current_user.email.split('@')[0].replace('.', ' ').replace('_', ' ').title()
         parts = raw.split(' ', 1)
+        next_id = (db.query(func.max(Customer.customer_id)).scalar() or 0) + 1
         customer = Customer(
+            customer_id=next_id,
             first_name=parts[0],
             last_name=parts[1] if len(parts) > 1 else '',
             email=current_user.email
@@ -248,23 +250,29 @@ from app.schemas import AddTrackSchema
 
 @router.post("/tracks", tags=["admin"])
 def add_track(data: AddTrackSchema, db: Session = Depends(get_db), current_user: User = Depends(auth_module.require_admin)):
+    from sqlalchemy import func
+    from decimal import Decimal
+
     # Buscar o crear artista
     artist = db.query(Artist).filter(Artist.name.ilike(data.artist_name)).first()
     if not artist:
-        artist = Artist(name=data.artist_name)
+        next_artist_id = (db.query(func.max(Artist.artist_id)).scalar() or 0) + 1
+        artist = Artist(artist_id=next_artist_id, name=data.artist_name)
         db.add(artist)
         db.flush()
 
-    # Buscar o crear álbum "Single" del artista
+    # Buscar o crear álbum "Singles" del artista
     album_title = f"Singles - {artist.name}"
     album = db.query(Album).filter(Album.artist_id == artist.artist_id, Album.title == album_title).first()
     if not album:
-        album = Album(title=album_title, artist_id=artist.artist_id)
+        next_album_id = (db.query(func.max(Album.album_id)).scalar() or 0) + 1
+        album = Album(album_id=next_album_id, title=album_title, artist_id=artist.artist_id)
         db.add(album)
         db.flush()
 
-    from decimal import Decimal
+    next_track_id = (db.query(func.max(Track.track_id)).scalar() or 0) + 1
     track = Track(
+        track_id=next_track_id,
         name=data.name,
         album_id=album.album_id,
         genre_id=data.genre_id,
