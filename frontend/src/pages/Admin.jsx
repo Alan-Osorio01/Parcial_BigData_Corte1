@@ -30,7 +30,7 @@ function Admin() {
         </div>
         <div style={{ background:'white', padding:'1.5rem', borderRadius:8, boxShadow:'0 2px 8px rgba(0,0,0,0.1)', gridColumn:'1/-1' }}>
           <h3>ℹ️ Información del sistema</h3>
-          <p style={{ color:'#666', marginTop:'0.5rem' }}>Backend: <code>http://44.216.77.83:8000/api</code></p>
+          <p style={{ color:'#666', marginTop:'0.5rem' }}>Backend: <code>{import.meta.env.VITE_API_URL || 'http://localhost:8000/api'}</code></p>
           <p style={{ color:'#666' }}>Rol actual: <strong style={{ color:'#e94560' }}>{user.role}</strong></p>
         </div>
       </div>
