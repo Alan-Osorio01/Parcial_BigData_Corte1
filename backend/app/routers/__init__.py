@@ -99,7 +99,25 @@ def search_tracks(q: str, db: Session = Depends(get_db)):
             Genre.name.ilike(f"%{q}%")
         )).limit(100).all()
     )
+    if not tracks:
+        raise HTTPException(status_code=404, detail="No se encontraron canciones")
     return _format_tracks(tracks)
+
+@router.get("/tracks/{track_id}", tags=["tracks"])
+def get_track(track_id: int, db: Session = Depends(get_db)):
+    t = db.query(Track).filter(Track.track_id == track_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Canción no encontrada")
+    album = t.album
+    artist = album.artist if album else None
+    return {
+        "track_id": t.track_id,
+        "name": t.name,
+        "unit_price": float(t.unit_price),
+        "album": album.title if album else None,
+        "artist": artist.name if artist else None,
+        "genre": t.genre.name if t.genre else None,
+    }
 
 
 # ─── CUSTOMERS ────────────────────────────────────────────────────────────────
@@ -141,6 +159,13 @@ def get_customers(db: Session = Depends(get_db)):
         }
         for c in customers
     ]
+
+@router.get("/customers/{customer_id}", tags=["customers"])
+def get_customer(customer_id: int, db: Session = Depends(get_db)):
+    c = db.query(Customer).filter(Customer.customer_id == customer_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    return {"customer_id": c.customer_id, "first_name": c.first_name, "last_name": c.last_name, "email": c.email}
 
 
 # ─── INVOICES ─────────────────────────────────────────────────────────────────
@@ -211,9 +236,10 @@ def purchase(data: PurchaseRequest, db: Session = Depends(get_db)):
 
     return {
         "invoice_id": invoice.invoice_id,
+        "customer_id": data.customer_id,
         "customer": f"{customer.first_name} {customer.last_name}",
         "tracks": [t.name for t in tracks],
-        "total": float(total),
+        "total": str(total),
         "date": invoice.invoice_date.isoformat()
     }
 
