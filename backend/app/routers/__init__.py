@@ -173,6 +173,8 @@ from decimal import Decimal
 
 @router.post("/purchase", tags=["purchase"])
 def purchase(data: PurchaseRequest, db: Session = Depends(get_db)):
+    from sqlalchemy import func
+
     customer = db.query(Customer).filter(Customer.customer_id == data.customer_id).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
@@ -183,7 +185,9 @@ def purchase(data: PurchaseRequest, db: Session = Depends(get_db)):
 
     total = sum(t.unit_price for t in tracks)
 
+    next_invoice_id = (db.query(func.max(Invoice.invoice_id)).scalar() or 0) + 1
     invoice = Invoice(
+        invoice_id=next_invoice_id,
         customer_id=data.customer_id,
         invoice_date=datetime.utcnow(),
         total=total
@@ -191,8 +195,10 @@ def purchase(data: PurchaseRequest, db: Session = Depends(get_db)):
     db.add(invoice)
     db.flush()
 
-    for track in tracks:
+    next_line_id = (db.query(func.max(InvoiceLine.invoice_line_id)).scalar() or 0) + 1
+    for i, track in enumerate(tracks):
         line = InvoiceLine(
+            invoice_line_id=next_line_id + i,
             invoice_id=invoice.invoice_id,
             track_id=track.track_id,
             unit_price=track.unit_price,
