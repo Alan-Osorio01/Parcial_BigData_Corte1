@@ -105,6 +105,28 @@ def search_tracks(q: str, db: Session = Depends(get_db)):
 # ─── CUSTOMERS ────────────────────────────────────────────────────────────────
 from app.models import Customer
 
+@router.get("/customers/me", tags=["customers"])
+def my_customer(db: Session = Depends(get_db), current_user: User = Depends(auth_module.get_current_user)):
+    customer = db.query(Customer).filter(Customer.email == current_user.email).first()
+    if not customer:
+        # Crear cliente a partir del email del usuario registrado
+        raw = current_user.email.split('@')[0].replace('.', ' ').replace('_', ' ').title()
+        parts = raw.split(' ', 1)
+        customer = Customer(
+            first_name=parts[0],
+            last_name=parts[1] if len(parts) > 1 else '',
+            email=current_user.email
+        )
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+    return {
+        "customer_id": customer.customer_id,
+        "first_name": customer.first_name,
+        "last_name": customer.last_name,
+        "email": customer.email
+    }
+
 @router.get("/customers", tags=["customers"])
 def get_customers(db: Session = Depends(get_db)):
     customers = db.query(Customer).all()

@@ -16,6 +16,7 @@ export const getCustomers = () => API.get('/customers')
 export const purchaseTracks = (data) => API.post('/purchase', data)
 export const registerUser = (data) => API.post('/auth/register', data)
 export const loginUser = (data) => API.post('/auth/login', data)
+export const getMyCustomer = () => API.get('/customers/me')
 export const getMyInvoices = () => API.get('/invoices/me')
 
 export default API
