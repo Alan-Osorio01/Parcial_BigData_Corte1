@@ -208,3 +208,76 @@ def purchase(data: PurchaseRequest, db: Session = Depends(get_db)):
         "total": float(total),
         "date": invoice.invoice_date.isoformat()
     }
+
+
+# ─── GENRES ───────────────────────────────────────────────────────────────────
+@router.get("/genres", tags=["admin"])
+def get_genres(db: Session = Depends(get_db)):
+    from app.models import Genre
+    return [{"genre_id": g.genre_id, "name": g.name} for g in db.query(Genre).order_by(Genre.name).all()]
+
+
+# ─── ADMIN — USUARIOS ─────────────────────────────────────────────────────────
+@router.get("/admin/users", tags=["admin"])
+def list_users(db: Session = Depends(get_db), current_user: User = Depends(auth_module.require_admin)):
+    users = db.query(User).order_by(User.created_at.desc()).all()
+    return [
+        {
+            "user_id": u.user_id,
+            "email": u.email,
+            "role": u.role,
+            "created_at": u.created_at.isoformat() if u.created_at else None
+        }
+        for u in users
+    ]
+
+@router.delete("/admin/users/{user_id}", tags=["admin"])
+def delete_user(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(auth_module.require_admin)):
+    if user_id == current_user.user_id:
+        raise HTTPException(status_code=400, detail="No puedes eliminar tu propia cuenta")
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    db.delete(user)
+    db.commit()
+    return {"message": "Usuario eliminado"}
+
+
+# ─── ADMIN — CANCIONES ────────────────────────────────────────────────────────
+from app.schemas import AddTrackSchema
+
+@router.post("/tracks", tags=["admin"])
+def add_track(data: AddTrackSchema, db: Session = Depends(get_db), current_user: User = Depends(auth_module.require_admin)):
+    # Buscar o crear artista
+    artist = db.query(Artist).filter(Artist.name.ilike(data.artist_name)).first()
+    if not artist:
+        artist = Artist(name=data.artist_name)
+        db.add(artist)
+        db.flush()
+
+    # Buscar o crear álbum "Single" del artista
+    album_title = f"Singles - {artist.name}"
+    album = db.query(Album).filter(Album.artist_id == artist.artist_id, Album.title == album_title).first()
+    if not album:
+        album = Album(title=album_title, artist_id=artist.artist_id)
+        db.add(album)
+        db.flush()
+
+    from decimal import Decimal
+    track = Track(
+        name=data.name,
+        album_id=album.album_id,
+        genre_id=data.genre_id,
+        unit_price=Decimal(str(data.unit_price))
+    )
+    db.add(track)
+    db.commit()
+    db.refresh(track)
+
+    return {
+        "track_id": track.track_id,
+        "name": track.name,
+        "artist": artist.name,
+        "unit_price": float(track.unit_price),
+        "message": "Canción agregada exitosamente"
+    }

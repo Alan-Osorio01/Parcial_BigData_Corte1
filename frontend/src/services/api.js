@@ -18,5 +18,9 @@ export const registerUser = (data) => API.post('/auth/register', data)
 export const loginUser = (data) => API.post('/auth/login', data)
 export const getMyCustomer = () => API.get('/customers/me')
 export const getMyInvoices = () => API.get('/invoices/me')
+export const getGenres = () => API.get('/genres')
+export const getAdminUsers = () => API.get('/admin/users')
+export const deleteUser = (id) => API.delete(`/admin/users/${id}`)
+export const addTrack = (data) => API.post('/tracks', data)
 
 export default API

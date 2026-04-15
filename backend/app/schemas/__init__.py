@@ -62,3 +62,9 @@ class RegisterSchema(BaseModel):
 class LoginSchema(BaseModel):
     email: EmailStr
     password: str
+
+class AddTrackSchema(BaseModel):
+    name: str
+    artist_name: str
+    genre_id: int
+    unit_price: float
