@@ -63,10 +63,9 @@ def me(current_user: User = Depends(auth_module.get_current_user)):
 # ─── TRACKS ───────────────────────────────────────────────────────────────────
 from app.models import Track, Album, Artist, Genre
 from app.schemas import TrackDetailSchema
+from sqlalchemy import or_
 
-@router.get("/tracks", tags=["tracks"])
-def get_tracks(limit: int = 50, offset: int = 0, db: Session = Depends(get_db)):
-    tracks = db.query(Track).offset(offset).limit(limit).all()
+def _format_tracks(tracks):
     result = []
     for t in tracks:
         album = t.album
@@ -81,6 +80,26 @@ def get_tracks(limit: int = 50, offset: int = 0, db: Session = Depends(get_db)):
             "genre": genre.name if genre else None,
         })
     return result
+
+@router.get("/tracks", tags=["tracks"])
+def get_tracks(limit: int = 50, offset: int = 0, db: Session = Depends(get_db)):
+    tracks = db.query(Track).offset(offset).limit(limit).all()
+    return _format_tracks(tracks)
+
+@router.get("/tracks/search", tags=["tracks"])
+def search_tracks(q: str, db: Session = Depends(get_db)):
+    tracks = (
+        db.query(Track)
+        .join(Album, Track.album_id == Album.album_id)
+        .join(Artist, Album.artist_id == Artist.artist_id)
+        .join(Genre, Track.genre_id == Genre.genre_id)
+        .filter(or_(
+            Track.name.ilike(f"%{q}%"),
+            Artist.name.ilike(f"%{q}%"),
+            Genre.name.ilike(f"%{q}%")
+        )).limit(100).all()
+    )
+    return _format_tracks(tracks)
 
 
 # ─── CUSTOMERS ────────────────────────────────────────────────────────────────
@@ -98,6 +117,28 @@ def get_customers(db: Session = Depends(get_db)):
         }
         for c in customers
     ]
+
+
+# ─── INVOICES ─────────────────────────────────────────────────────────────────
+@router.get("/invoices/me", tags=["invoices"])
+def my_invoices(db: Session = Depends(get_db), current_user: User = Depends(auth_module.get_current_user)):
+    customer = db.query(Customer).filter(Customer.email == current_user.email).first()
+    if not customer:
+        return {"customer": None, "invoices": []}
+    result = []
+    for inv in customer.invoices:
+        tracks = [
+            {"name": line.track.name, "price": float(line.unit_price)}
+            for line in inv.lines if line.track
+        ]
+        result.append({
+            "invoice_id": inv.invoice_id,
+            "date": inv.invoice_date.isoformat(),
+            "total": float(inv.total),
+            "tracks": tracks
+        })
+    result.sort(key=lambda x: x["date"], reverse=True)
+    return {"customer": f"{customer.first_name} {customer.last_name}", "invoices": result}
 
 
 # ─── PURCHASE ─────────────────────────────────────────────────────────────────
