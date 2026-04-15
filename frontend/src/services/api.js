@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const API = axios.create({
-  baseURL: 'http://44.216.77.83:8000/api'
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
 })
 
 export const getTracks = (limit = 50) => API.get(`/tracks?limit=${limit}`)

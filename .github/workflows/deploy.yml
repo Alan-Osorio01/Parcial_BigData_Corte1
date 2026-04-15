@@ -5,9 +5,52 @@ on:
     branches: [ main ]
 
 jobs:
+  test-backend:
+    name: 🐍 Tests Backend
+    runs-on: ubuntu-latest
+    env:
+      DB_USER: test
+      DB_PASSWORD: test
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: test
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Instalar dependencias
+        run: |
+          cd backend
+          pip install -r requirements.txt -q
+      - name: Correr tests
+        run: |
+          cd backend
+          pytest app/tests/ -v
+
+  test-frontend:
+    name: ⚛️ Tests Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Instalar dependencias
+        run: |
+          cd frontend
+          npm install
+      - name: Correr tests
+        run: |
+          cd frontend
+          npm test
+
   deploy-backend:
     name: 🐍 Deploy Backend
     runs-on: ubuntu-latest
+    needs: [test-backend, test-frontend]
     steps:
       - name: Checkout código
         uses: actions/checkout@v3
@@ -44,6 +87,7 @@ jobs:
           script: |
             cd ~/Parcial_BigData_Corte1/frontend
             git pull origin main
+            echo "VITE_API_URL=http://${{ secrets.BACKEND_HOST }}:8000/api" > .env
             npm install -q
             npm run build
             sudo rm -rf /var/www/html/*
