@@ -24,7 +24,7 @@ TARGET_PATH = f"s3://{BUCKET}/fact_sales/"
 
 def read_jdbc(table: str) -> DynamicFrame:
     return glueContext.create_dynamic_frame.from_options(
-        connection_type="postgresql",
+        connection_type="jdbc",
         connection_options={
             "useConnectionProperties": "true",
             "dbtable": table,

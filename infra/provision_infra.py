@@ -16,7 +16,7 @@ DB_PASSWORD     = "Parcial1"
 GLUE_DB         = "chinook_dw"
 GLUE_CONNECTION = "chinook-rds"
 ATHENA_WG       = "chinook-wg"
-GLUE_SG_NAME    = "sg-glue-chinook"
+GLUE_SG_NAME    = "glue-chinook-workers"
 
 BUCKET_PREFIXES = [
     "scripts/", "dim_customer/", "dim_customer_history/",
@@ -36,10 +36,7 @@ def create_bucket():
         s3.head_bucket(Bucket=BUCKET)
         print(f"  [skip] Bucket {BUCKET} ya existe")
     except ClientError:
-        s3.create_bucket(
-            Bucket=BUCKET,
-            CreateBucketConfiguration={"LocationConstraint": REGION},
-        )
+        s3.create_bucket(Bucket=BUCKET)
         print(f"  [ok]   Bucket {BUCKET} creado")
     for prefix in BUCKET_PREFIXES:
         s3.put_object(Bucket=BUCKET, Key=prefix)

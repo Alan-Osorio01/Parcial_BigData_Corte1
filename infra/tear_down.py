@@ -7,7 +7,7 @@ BUCKET          = "chinook-datalake-academy"
 GLUE_DB         = "chinook_dw"
 GLUE_CONNECTION = "chinook-rds"
 ATHENA_WG       = "chinook-wg"
-GLUE_SG_NAME    = "sg-glue-chinook"
+GLUE_SG_NAME    = "glue-chinook-workers"
 VPC_ID          = "vpc-0f2744cffdd612162"
 
 JOB_NAMES = [
