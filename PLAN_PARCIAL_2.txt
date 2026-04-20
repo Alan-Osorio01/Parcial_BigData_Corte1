@@ -1,0 +1,937 @@
+================================================================================
+  PLAN DE IMPLEMENTACIÓN — PARCIAL 2 BIG DATA
+  Chinook Music Store — Capa Analítica (ETL + DW + Athena + Power BI)
+================================================================================
+
+Equipo: Alan Osorio · Daniela López · Ana Amador
+Materia: Big Data — Semestre 8
+Punto de partida: Parcial 1 ya desplegado en cuenta AWS Academy
+
+
+================================================================================
+1. QUÉ SE DEBE CONSTRUIR (LECTURA DEL PDF)
+================================================================================
+
+OBJETIVO DE ANALÍTICA — responder estas 4 preguntas:
+  1. Número de canciones vendidas por día
+  2. Artista más vendido por mes
+  3. Día de la semana con más compras
+  4. Mes con mayor número de ventas
+
+MODELO ESTRELLA (desnormalización de la BD transaccional Chinook):
+
+  ┌─────────────────────────────────────┐
+  │  FactSales                          │
+  │  ───────────────────────            │
+  │  CustomerKey      (FK → DimCustomer)│
+  │  TrackKey         (FK → DimTrack)   │
+  │  InvoiceDateKey   (FK → DimDate, yyyymmdd int)
+  │  EmployeeKey      (FK → DimEmployee)│
+  │  Quantity                           │
+  │  UnitPrice                          │
+  │  TotalAmount                        │
+  └─────────────────────────────────────┘
+
+  DimCustomer        DimTrack           DimEmployee (*)    DimDate
+  ───────────────    ───────────────    ──────────────     ─────────────
+  CustomerKey PK     TrackKey PK        EmployeeKey PK     DateKey PK (yyyymmdd)
+  FirstName          Name               FirstName          FullDate
+  LastName           Album              LastName           Year
+  Company            Artist             Title              Quarter
+  Country            Genre              ReportsTo          Month
+  City               MediaType          ...                Day
+  State              Composer                              DayOfWeek
+  Email              Milliseconds                          IsHoliday
+
+  (*) El PDF menciona "EmployeeKey" en FactSales y exige ETL full copy con
+      histórico de "a quién le reporta cada empleado" → implica DimEmployee
+      con campo ReportsTo (auto-referencia).
+
+REQUISITOS TRANSVERSALES DEL PDF:
+  - Almacenamiento: S3 + Athena, particionado por año/mes/día
+  - ETLs:
+      · DimCustomer, DimTrack, FactSales → Glue VISUAL
+      · DimEmployee full copy (histórico ReportsTo)
+      · DimDate → script Python con paquete "holidays"
+  - ETLs deben mantener datos sincronizados con el Parcial 1 (sistema OLTP)
+  - Presentación: Power BI conectado a AWS Athena
+  - Toda la arquitectura con CI/CD + pruebas unitarias
+  - Los jobs son archivos en S3 — creados/actualizados vía boto3
+
+
+================================================================================
+2. ARQUITECTURA TARGET
+================================================================================
+
+    RDS PostgreSQL (Chinook OLTP — Parcial 1)
+              │
+              │   (Glue Connection JDBC desde VPC)
+              ▼
+    ┌─────────────────────────────────────────┐
+    │  AWS Glue                               │
+    │  - Visual ETL: DimCustomer              │
+    │  - Visual ETL: DimTrack                 │
+    │  - Visual ETL: DimEmployee (full copy)  │
+    │  - Visual ETL: FactSales                │
+    │  - Python Shell: DimDate (holidays)     │
+    └──────────────────┬──────────────────────┘
+                       │  (Parquet, particionado year/month/day)
+                       ▼
+    ┌─────────────────────────────────────────┐
+    │  S3 Bucket: chinook-datalake            │
+    │    ├── dim_customer/                    │
+    │    ├── dim_customer_history/            │
+    │    ├── dim_track/                       │
+    │    ├── dim_employee/                    │
+    │    ├── dim_employee_history/            │
+    │    ├── dim_date/                        │
+    │    ├── fact_sales/year=2026/month=04/   │
+    │    │                    day=15/*.parquet│
+    │    └── scripts/  (código de los jobs)   │
+    └──────────────────┬──────────────────────┘
+                       │
+                       ▼
+            AWS Glue Data Catalog
+                       │
+                       ▼
+               AWS Athena (SQL)
+                       │
+                       ▼
+        Power BI Desktop (ODBC Simba)
+        └── 4 dashboards conectados
+
+
+================================================================================
+3. COMPONENTES A ENTREGAR
+================================================================================
+
+INFRAESTRUCTURA AWS (nueva)
+  [ ] Bucket S3 "chinook-datalake" con estructura de carpetas
+  [ ] IAM Role "GlueChinookRole" (acceso a RDS + S3 + Glue Catalog)
+  [ ] Glue Connection JDBC al RDS
+  [ ] VPC Endpoint / Security Group para permitir Glue → RDS
+  [ ] Glue Database "chinook_dw" en Data Catalog
+  [ ] Athena Workgroup + resultado de queries en S3
+
+ETL JOBS
+  [ ] dim_customer_etl.py          (Glue Visual → script exportado)
+  [ ] dim_track_etl.py             (Glue Visual → script exportado)
+  [ ] dim_employee_etl.py          (Glue Visual, full copy con histórico)
+  [ ] dim_employee_history_etl.py  (Full copy con snapshot_date)
+  [ ] dim_customer_history_etl.py  (Full copy con snapshot_date)
+  [ ] fact_sales_etl.py            (Glue Visual, joins + particionamiento)
+  [ ] dim_date_etl.py              (Python Shell, usa "holidays")
+
+TABLAS ATHENA (DDL)
+  [ ] CREATE EXTERNAL TABLE dim_customer
+  [ ] CREATE EXTERNAL TABLE dim_track
+  [ ] CREATE EXTERNAL TABLE dim_employee
+  [ ] CREATE EXTERNAL TABLE dim_date
+  [ ] CREATE EXTERNAL TABLE fact_sales (PARTITIONED BY year,month,day)
+  [ ] MSCK REPAIR TABLE fact_sales (cargar particiones)
+
+BOTO3 AUTOMATION
+  [ ] infra/provision_infra.py     (crea bucket + IAM + DB Glue)
+  [ ] infra/deploy_jobs.py         (sube scripts a S3, crea/actualiza jobs)
+  [ ] infra/create_athena_tables.py(ejecuta DDLs)
+  [ ] infra/schedule_jobs.py       (Glue Triggers para scheduling)
+
+CI/CD
+  [ ] .github/workflows/etl-deploy.yml  (nuevo workflow)
+  [ ] Secrets AWS en GitHub (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+  [ ] Tests pytest para código Python (DimDate + helpers)
+  [ ] Tests PySpark local para transformaciones de Glue
+
+POWER BI
+  [ ] Driver Simba ODBC instalado
+  [ ] DSN configurado apuntando a Athena
+  [ ] Archivo chinook_analytics.pbix en el repo
+  [ ] 4 dashboards:
+      a) Canciones vendidas por día (line chart)
+      b) Top artistas por mes (matriz)
+      c) Día de semana más vendedor (donut/bar)
+      d) Mes con más ventas (bar chart)
+
+DOCUMENTACIÓN
+  [ ] analytics/README.md (cómo correr ETLs, como conectar Power BI)
+  [ ] Diagrama de arquitectura (drawio o similar)
+  [ ] Actualizar ONBOARDING.md con sección de analítica
+
+
+================================================================================
+4. DIVISIÓN POR PERSONA
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+  ALAN OSORIO — INFRA + CI/CD + FACT SALES (LA PARTE MÁS COMPLEJA)
+────────────────────────────────────────────────────────────────────────────────
+
+ROL: Plataforma completa + el ETL más complejo (FactSales). Habilita a los
+     otros dos en Fase 1 y después trabaja en paralelo en lo más técnico.
+PREREQUISITO: Nadie puede avanzar hasta que Alan termine FASE 1.
+
+FASE 1 — Setup AWS (desbloquea al resto, prioridad día 1)
+  1. Crear bucket S3 "chinook-datalake-academy" con carpetas:
+        /scripts/  /dim_customer/  /dim_track/  /dim_employee/
+        /dim_date/  /fact_sales/  /athena-results/
+        /dim_customer_history/  /dim_employee_history/
+  2. IAM Role: NO crear uno nuevo — usar el "LabRole" que ya trae
+     AWS Academy. Verificar que tenga los permisos necesarios:
+        - S3: lectura/escritura al bucket
+        - Glue: ejecutar jobs + acceso al Data Catalog
+        - Athena: ejecutar queries
+     Si falta algo, agregar policy inline (Academy suele permitir esto).
+  3. Ajustar networking para Glue → RDS:
+        - Agregar regla en SG-RDS: inbound 5432 desde SI MISMO SG
+          (permite que Glue corra en la misma VPC y alcance el RDS)
+        - Confirmar subnet de Glue en la misma VPC del RDS
+  4. Crear Glue Connection "chinook-rds" tipo JDBC:
+        - URL: jdbc:postgresql://chinook-db.xxx.rds.amazonaws.com:5432/chinook
+        - Username: postgres, Password: Parcial1
+        - VPC + subnet privada + SG-RDS
+        - Probar con "Test connection" desde Console
+  5. Crear Glue Database "chinook_dw" en Data Catalog
+  6. Crear Athena Workgroup "chinook-wg" con output location
+        s3://chinook-datalake-academy/athena-results/
+
+  → Al terminar: avisar a Daniela y Ana que pueden empezar sus ETLs.
+
+FASE 2 — Scripts boto3 (despliegue reproducible)
+  Carpeta nueva: /infra/
+  Archivos:
+    - provision_infra.py
+        · Crea bucket (si no existe)
+        · Crea Glue Database
+        · Crea Glue Connection (usando LabRole)
+        · Crea Athena Workgroup
+        · IDEMPOTENTE — correrlo dos veces no rompe nada
+    - deploy_jobs.py
+        · Lee scripts de /etl/glue_jobs/*.py
+        · Los sube a s3://chinook-datalake-academy/scripts/
+        · Crea/actualiza los Glue Jobs vía boto3.client('glue').create_job()
+        · Usa role=LabRole en cada job
+    - create_athena_tables.py
+        · Lee /infra/athena_ddls.sql (Ana lo entrega)
+        · Ejecuta cada DDL vía boto3.client('athena').start_query_execution()
+    - schedule_jobs.py
+        · Crea Glue Triggers cada 30 min para ETLs incrementales
+        · Dependencia: DimDate → DimCustomer → DimTrack → FactSales
+    - tear_down.py (útil para reset total)
+
+FASE 3 — FactSales ETL (el más complejo de todos los ETLs)
+  Archivo: /etl/glue_jobs/fact_sales_etl.py
+  Source: RDS "invoice" + "invoice_line"
+  Joins necesarios:
+    - invoice_line INNER JOIN invoice ON invoice_id
+    - invoice LEFT JOIN customer ON customer_id
+    - customer LEFT JOIN employee ON support_rep_id (→ EmployeeKey)
+    - track_id viene directo de invoice_line
+  Cálculos:
+    - InvoiceDateKey = int(year*10000 + month*100 + day) desde invoice_date
+    - TotalAmount = unit_price * quantity
+  Columnas finales del parquet:
+    CustomerKey, TrackKey, InvoiceDateKey, EmployeeKey,
+    Quantity, UnitPrice, TotalAmount
+  Particionamiento físico en S3:
+    s3://.../fact_sales/year=2026/month=04/day=15/*.parquet
+  Estrategia incremental:
+    - Activar Glue Job Bookmark en el job
+    - Bookmark se apoya en invoice.invoice_date
+    - En cada ejecución solo procesa facturas nuevas
+  Build en Glue Studio:
+    - Visual mode con Source JDBC → Join Nodes → SQL Transform para
+      derivar InvoiceDateKey → Target S3 con partitioning
+    - Exportar script Python → commit a /etl/glue_jobs/fact_sales_etl.py
+
+FASE 4 — Pipeline CI/CD para analítica
+  Archivo nuevo: .github/workflows/etl-deploy.yml
+  Jobs:
+    1) test-etl: pytest sobre /etl/tests/ (no requiere AWS)
+    2) validate-scripts: sanity check de Python (flake8, sintaxis)
+    3) deploy-scripts: sube /etl/glue_jobs/*.py y /etl/python_jobs/*.py a S3
+    4) update-jobs: actualiza Glue Jobs via boto3.update_job()
+  Secrets nuevos en GitHub (rotan cada 4h, actualizar manualmente):
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+    - AWS_SESSION_TOKEN    ← clave, Academy lo requiere
+    - AWS_REGION = us-east-1
+  ESTRATEGIA RECOMENDADA:
+    - Jobs 1-2 (tests) corren automático en cada push
+    - Jobs 3-4 (deploy) con "workflow_dispatch" (trigger manual)
+      porque las credentials rotan y no vale la pena forzar CI
+    - Documentar en README cómo actualizar los secrets antes del deploy
+
+FASE 5 — Integración end-to-end + docs
+  - Test end-to-end: compra en la app → datos en FactSales en ≤30min
+  - Diagrama de arquitectura (sección 2 de este plan) en docs/arch.drawio
+  - Actualizar ONBOARDING.md con sección "Analítica":
+      · Cómo ejecutar provision_infra.py la primera vez
+      · Cómo renovar credenciales de Academy (pasos exactos)
+      · Cómo correr los ETLs manualmente desde Console
+  - Code reviews de los PRs de Daniela y Ana
+
+ENTREGABLES ALAN:
+  - Infraestructura AWS lista (bucket + LabRole + Glue Connection + Athena WG)
+  - /infra/provision_infra.py, deploy_jobs.py, create_athena_tables.py,
+    schedule_jobs.py, tear_down.py
+  - /etl/glue_jobs/fact_sales_etl.py (el más complejo)
+  - .github/workflows/etl-deploy.yml
+  - docs/arch.drawio (diagrama)
+  - Sección "Analítica" en ONBOARDING.md
+
+
+────────────────────────────────────────────────────────────────────────────────
+  DANIELA LÓPEZ — ETLs VISUALES DE DIMENSIONES (GLUE STUDIO)
+────────────────────────────────────────────────────────────────────────────────
+
+ROL: Dueña de las 3 dimensiones (Customer, Track, Employee) en Glue Visual
+     + historial (snapshots full copy).
+PREREQUISITO: Alan debe tener lista la Glue Connection al RDS (Fase 1 de Alan).
+
+FASE 1 — Estudiar Glue Studio (puede empezar en paralelo con Alan Fase 1)
+  - Tutorial oficial de Glue Visual ETL (mientras Alan arma la infra)
+  - Leer docs de "Visual job with a source, transform, and target"
+  - Convención de naming: snake_case para carpetas, PascalCase para columnas
+  - Plantilla mental: JDBC source → transforms → S3 target (Parquet snappy)
+
+FASE 2 — DimCustomer (Glue Visual, empezar por el más simple)
+  Source: RDS tabla "customer" (via Glue Connection que crea Alan)
+  Transformaciones (nodes):
+    - ApplyMapping: customer_id → CustomerKey
+    - DropFields: los campos que no están en el modelo (address, postal_code,
+      phone, fax, support_rep_id)
+    - Columnas finales: CustomerKey, FirstName, LastName, Company, Country,
+      City, State, Email
+  Target: s3://chinook-datalake-academy/dim_customer/ (Parquet, overwrite)
+  Post:
+    - Exportar script Python generado → /etl/glue_jobs/dim_customer_etl.py
+    - Commit al repo
+    - Screenshot del visual job → docs/screenshots/etl/
+
+FASE 3 — DimTrack (Glue Visual, con múltiples joins)
+  Source: RDS "track" + joins
+  Nodes en Visual:
+    - JDBC source: track
+    - Join con album ON album_id (LEFT JOIN)
+    - Join con artist ON album.artist_id (LEFT JOIN)
+    - Join con genre ON genre_id (LEFT JOIN)
+    - Join con media_type ON media_type_id (LEFT JOIN)
+    - ApplyMapping + DropFields
+  Output columns:
+    TrackKey, Name, Album, Artist, Genre, MediaType, Composer, Milliseconds
+  Target: s3://chinook-datalake-academy/dim_track/
+  Export → /etl/glue_jobs/dim_track_etl.py
+
+FASE 4 — DimEmployee + full copy con histórico (SCD-lite)
+  Source: RDS "employee"
+  Lógica doble:
+    A) Job principal dim_employee_etl.py:
+       - Overwrite en s3://chinook-datalake-academy/dim_employee/
+       - Siempre contiene el estado actual
+    B) Job full-copy dim_employee_history_etl.py:
+       - Append en s3://chinook-datalake-academy/dim_employee_history/
+         snapshot_date=yyyymmdd/
+       - Cada ejecución crea un snapshot completo
+       - Permite reconstruir la jerarquía reports_to histórica
+  Campos:
+    EmployeeKey, FirstName, LastName, Title, ReportsTo, HireDate, Email
+  Aplicar misma lógica de snapshots para DimCustomer_History:
+    /etl/glue_jobs/dim_customer_history_etl.py
+
+FASE 5 — Glue Job Bookmarks (incrementalidad de dimensiones)
+  - Activar Bookmark en dim_customer y dim_track (solo procesan filas nuevas)
+  - Los jobs _history NO usan bookmark (deben copiar todo cada vez)
+  - Documentar en /etl/README.md qué job es incremental vs full
+
+FASE 6 — Tests de los ETLs
+  Pruebas manuales:
+    - Registrar usuario en la app frontend → ejecutar DimCustomer → verificar
+      SELECT * FROM dim_customer WHERE Email='alan@test.com' en Athena
+    - Crear snapshot manual de DimEmployee → verificar particiones S3
+  Automatizadas (coordinar con Ana):
+    - Ana hace los pytest con mock data (PySpark local)
+
+ENTREGABLES DANIELA:
+  - /etl/glue_jobs/dim_customer_etl.py
+  - /etl/glue_jobs/dim_customer_history_etl.py
+  - /etl/glue_jobs/dim_track_etl.py
+  - /etl/glue_jobs/dim_employee_etl.py
+  - /etl/glue_jobs/dim_employee_history_etl.py
+  - Screenshots de los 5 visual jobs en docs/screenshots/etl/
+  - Sección troubleshooting en /etl/README.md
+
+
+────────────────────────────────────────────────────────────────────────────────
+  ANA AMADOR — DIM DATE (PYTHON) + POWER BI + TESTS UNITARIOS
+────────────────────────────────────────────────────────────────────────────────
+
+ROL: DimDate (script Python), Athena DDL, Power BI y pruebas unitarias.
+PREREQUISITO PARCIAL: Puede avanzar con DimDate sin depender de Alan.
+                     Necesita a Alan para subir a S3 y a Daniela para el
+                     resto de tablas cargadas antes del Power BI.
+
+FASE 1 — DimDate con paquete "holidays" (empezar YA, independiente)
+  Archivo: /etl/python_jobs/dim_date_etl.py
+  Librerías:
+    pip install holidays pandas pyarrow boto3
+  Lógica:
+    - Generar rango: 2009-01-01 a 2030-12-31
+    - Por cada fecha calcular:
+        · DateKey = int(fecha.strftime('%Y%m%d'))
+        · FullDate = date
+        · Year, Quarter, Month, Day, DayOfWeek
+        · IsHoliday = True si está en holidays.Colombia(year) (o US, decidir)
+    - Escribir como Parquet localmente
+    - Subir a s3://chinook-datalake/dim_date/ vía boto3
+  Configurar como Glue Python Shell Job (no Spark) porque es dataset pequeño.
+
+FASE 2 — DDLs de Athena
+  Archivo: /infra/athena_ddls.sql
+  Escribir CREATE EXTERNAL TABLE para las 5 tablas:
+    - dim_customer        (no particionado)
+    - dim_track           (no particionado)
+    - dim_employee        (no particionado)
+    - dim_date            (no particionado)
+    - fact_sales          (PARTITIONED BY year int, month int, day int)
+  Incluir MSCK REPAIR TABLE fact_sales al final para cargar particiones.
+  Validar cada DDL ejecutándola manualmente en Athena Console.
+
+FASE 3 — Tests unitarios con pytest
+  Archivo: /etl/tests/test_dim_date.py
+  Tests a cubrir:
+    - test_date_range_correcto()      # Cuántas fechas genera
+    - test_datekey_format_yyyymmdd()  # Format entero correcto
+    - test_holiday_navidad_colombia() # 2026-12-25 → IsHoliday=True
+    - test_weekday_domingo()          # DayOfWeek=Sunday para 2026-01-04
+    - test_quarter_correcto()         # Q1 para enero, Q4 para diciembre
+  Archivo: /etl/tests/test_transformations.py
+  Con PySpark local (pip install pyspark):
+    - Tests de transformaciones puras (sin depender de AWS)
+    - Mock de DynamicFrame con datos sintéticos
+    - Validar que DimCustomer tenga las columnas correctas
+    - Validar cálculo de TotalAmount en FactSales
+
+FASE 4 — Power BI instalación + conexión
+  1. Instalar Power BI Desktop (Windows, gratis)
+  2. Instalar driver ODBC Simba Athena (32 y 64 bit)
+  3. Configurar DSN:
+        · Nombre: ChinookAthena
+        · AwsRegion: us-east-1
+        · S3OutputLocation: s3://chinook-datalake/athena-results/
+        · Credenciales: access key + secret (de Academy)
+  4. En Power BI: Get Data → ODBC → ChinookAthena
+  5. Cargar las 5 tablas, establecer relaciones:
+        fact_sales.CustomerKey → dim_customer.CustomerKey
+        fact_sales.TrackKey → dim_track.TrackKey
+        fact_sales.EmployeeKey → dim_employee.EmployeeKey
+        fact_sales.InvoiceDateKey → dim_date.DateKey
+
+FASE 5 — 4 Dashboards en Power BI
+  Crear el archivo: /powerbi/chinook_analytics.pbix
+
+  Dashboard 1 — Canciones por día (line chart)
+    Visual: Line chart
+    Eje X: dim_date.FullDate
+    Eje Y: SUM(fact_sales.Quantity)
+    Filtro: último mes (slicer)
+
+  Dashboard 2 — Top artistas por mes (matriz o bar chart)
+    Matriz:
+      Filas: dim_date.Month + dim_date.Year
+      Columnas: Top 10 dim_track.Artist
+      Valores: SUM(fact_sales.TotalAmount)
+    Agregar ranking visual (medallas para top 3)
+
+  Dashboard 3 — Día de semana más comprador (donut)
+    Visual: Donut chart
+    Categorías: dim_date.DayOfWeek (lunes, martes, ...)
+    Valores: COUNT(fact_sales) o SUM(TotalAmount)
+
+  Dashboard 4 — Mes con más ventas (bar chart)
+    Visual: Clustered bar chart
+    Categorías: dim_date.Month
+    Valores: SUM(fact_sales.TotalAmount)
+    Desglose por Year para ver tendencia
+
+  Extras: página de inicio con KPI cards (total tracks, total revenue, etc.)
+
+FASE 6 — Documentación
+  /analytics/README.md:
+    - Cómo instalar driver ODBC Simba en Windows/Mac
+    - Cómo configurar DSN con credenciales Academy
+    - Cómo abrir el .pbix y refrescar datos
+    - Capturas de los 4 dashboards
+  /etl/tests/README.md:
+    - Cómo correr pytest local
+    - Cómo interpretar cobertura
+
+ENTREGABLES ANA:
+  - /etl/python_jobs/dim_date_etl.py
+  - /infra/athena_ddls.sql
+  - /etl/tests/test_dim_date.py + test_transformations.py
+  - /powerbi/chinook_analytics.pbix
+  - /analytics/README.md con screenshots de dashboards
+
+
+================================================================================
+5. FLUJO DE TRABAJO — PARALELISMO Y DEPENDENCIAS
+================================================================================
+
+MATRIZ DE DEPENDENCIAS (qué se puede hacer en paralelo vs secuencial):
+
+  TAREA                              DEPENDE DE            ¿PARALELIZABLE?
+  ─────────────────────────────────────────────────────────────────────
+  Alan: Setup infra AWS               Nada                  Desde día 1
+  Daniela: Tutorial Glue Studio       Nada                  Desde día 1
+  Ana: DimDate Python local           Nada                  Desde día 1
+  Ana: Unit tests DimDate             Nada                  Desde día 1
+  Ana: Escribir Athena DDLs           Nada                  Desde día 1
+  ─────────────────────────────────────────────────────────────────────
+  Daniela: DimCustomer visual         Alan Fase 1 lista     Desde día 2-3
+  Daniela: DimTrack visual            Alan Fase 1 lista     Desde día 2-3
+  Alan: FactSales visual              Alan Fase 1 lista     Desde día 2-3
+  ─────────────────────────────────────────────────────────────────────
+  Ana: Power BI ODBC setup            Alan Fase 1 lista     Desde día 2-3
+  Alan: boto3 scripts                 Alan Fase 1 lista     Desde día 2-3
+  Daniela: DimEmployee + history      Alan Fase 1 lista     Desde día 3+
+  ─────────────────────────────────────────────────────────────────────
+  Ana: Power BI dashboards            Datos en Athena       Sprint 3+
+  Alan: CI/CD etl-deploy.yml          Scripts existan       Sprint 3+
+  Alan: schedule_jobs.py              Todos los jobs listos Sprint 4
+  Integración end-to-end              Todo lo anterior      Sprint 4
+
+CONCLUSIÓN:
+  - Desde día 1, los 3 trabajan en paralelo (Alan infra, Ana DimDate,
+    Daniela estudiando Glue)
+  - Día 2-3 hay un checkpoint: Alan termina infra → Daniela y Ana
+    pueden avanzar con sus ETLs/DDLs
+  - Después de eso, 100% paralelo hasta el final
+
+
+SPRINT 1 — FUNDACIÓN (día 1-2, todos en paralelo)
+  ┌──────────────────────┬──────────────────────┬──────────────────────┐
+  │ ALAN                 │ DANIELA              │ ANA                  │
+  ├──────────────────────┼──────────────────────┼──────────────────────┤
+  │ Crear bucket S3      │ Tutorial Glue Studio │ DimDate.py local     │
+  │ LabRole + Glue Conn  │ Leer docs Visual ETL │ pytest DimDate       │
+  │ Glue DB + Athena WG  │                      │ Escribir athena_ddls │
+  └──────────────────────┴──────────────────────┴──────────────────────┘
+  ✅ Checkpoint día 2: Alan confirma infra lista. Daniela y Ana arrancan
+                       con el RDS conectado.
+
+SPRINT 2 — ETLs BÁSICOS (todos paralelos)
+  ┌──────────────────────┬──────────────────────┬──────────────────────┐
+  │ ALAN                 │ DANIELA              │ ANA                  │
+  ├──────────────────────┼──────────────────────┼──────────────────────┤
+  │ provision_infra.py   │ DimCustomer Visual   │ Instalar Power BI    │
+  │ deploy_jobs.py       │ DimTrack Visual      │ Driver ODBC Simba    │
+  │ Empezar FactSales    │                      │ Configurar DSN       │
+  └──────────────────────┴──────────────────────┴──────────────────────┘
+
+SPRINT 3 — ETLs AVANZADOS + DASHBOARDS (todos paralelos)
+  ┌──────────────────────┬──────────────────────┬──────────────────────┐
+  │ ALAN                 │ DANIELA              │ ANA                  │
+  ├──────────────────────┼──────────────────────┼──────────────────────┤
+  │ FactSales completo   │ DimEmployee + hist   │ Conectar PBI → Athena│
+  │ CI/CD etl-deploy.yml │ DimCustomer_history  │ 2 primeros dashboards│
+  │ create_athena_tbls   │ Bookmarks config     │ pytest transformations│
+  └──────────────────────┴──────────────────────┴──────────────────────┘
+
+SPRINT 4 — INTEGRACIÓN + ENTREGA (todos paralelos)
+  ┌──────────────────────┬──────────────────────┬──────────────────────┐
+  │ ALAN                 │ DANIELA              │ ANA                  │
+  ├──────────────────────┼──────────────────────┼──────────────────────┤
+  │ schedule_jobs.py     │ Test integración ETL │ 2 dashboards finales │
+  │ Diagrama arquitectura│ Screenshots jobs     │ Documentar Power BI  │
+  │ ONBOARDING.md analít │ /etl/README.md       │ Presentación         │
+  │ Review PRs           │                      │                      │
+  └──────────────────────┴──────────────────────┴──────────────────────┘
+
+
+================================================================================
+6. ESTRUCTURA DE CARPETAS PROPUESTA
+================================================================================
+
+Parcial_BigData_Corte1/
+├── backend/                         # Parcial 1 (no tocar salvo ajustes)
+├── frontend/                        # Parcial 1 (no tocar salvo ajustes)
+├── infra/                           # NUEVO — boto3 scripts (Alan)
+│   ├── provision_infra.py
+│   ├── deploy_jobs.py
+│   ├── create_athena_tables.py
+│   ├── schedule_jobs.py
+│   ├── athena_ddls.sql              # (Ana)
+│   └── tear_down.py
+├── etl/                             # NUEVO — todos los ETLs
+│   ├── glue_jobs/                   # (Daniela) scripts Glue exportados
+│   │   ├── dim_customer_etl.py
+│   │   ├── dim_customer_history_etl.py
+│   │   ├── dim_track_etl.py
+│   │   ├── dim_employee_etl.py
+│   │   ├── dim_employee_history_etl.py
+│   │   └── fact_sales_etl.py
+│   ├── python_jobs/                 # (Ana) scripts Python puros
+│   │   └── dim_date_etl.py
+│   ├── tests/                       # (Ana)
+│   │   ├── test_dim_date.py
+│   │   ├── test_transformations.py
+│   │   └── conftest.py
+│   └── README.md
+├── powerbi/                         # NUEVO — (Ana)
+│   └── chinook_analytics.pbix
+├── analytics/                       # NUEVO — (Ana)
+│   ├── README.md
+│   └── screenshots/
+├── docs/                            # NUEVO — (Alan)
+│   ├── arch.drawio
+│   └── screenshots/
+├── .github/workflows/
+│   ├── ci-cd.yml                    # existente
+│   ├── deploy.yml                   # existente
+│   └── etl-deploy.yml               # NUEVO — (Alan)
+├── ONBOARDING.md                    # ampliar con Analítica
+├── PLAN_PARCIAL_2.txt               # este archivo
+└── README.md
+
+
+================================================================================
+7. CRITERIOS DE ACEPTACIÓN POR COMPONENTE
+================================================================================
+
+FactSales ✓ cuando:
+  - Athena query "SELECT COUNT(*) FROM fact_sales" retorna > 0
+  - Particiones visibles en S3 (year=2026/month=04/day=15/*.parquet)
+  - Hacer una compra en la app frontend → aparece en Athena en ≤ 30min
+
+DimDate ✓ cuando:
+  - Athena query "SELECT IsHoliday FROM dim_date WHERE DateKey=20261225"
+    retorna TRUE
+  - Cubre rango 2009-2030 sin huecos
+
+DimCustomer ✓ cuando:
+  - COUNT coincide con COUNT en RDS customer (59 en Chinook base + nuevos)
+  - Registrar usuario en la app → aparece en DimCustomer en ≤ 30min
+
+DimEmployee ✓ cuando:
+  - Todos los empleados presentes
+  - Reports_to funciona (manager hierarchy consultable)
+  - Histórico en dim_employee_history/snapshot_date=...
+
+Pipeline CI/CD ✓ cuando:
+  - Push a main → tests pasan → scripts suben a S3 → Glue jobs actualizados
+  - Sin intervención manual
+
+Power BI ✓ cuando:
+  - Los 4 dashboards cargan datos reales desde Athena
+  - Al refrescar datos, se actualiza con los últimos registros del RDS
+
+
+================================================================================
+8. CONSIDERACIONES AWS ACADEMY (IMPORTANTE)
+================================================================================
+
+EL EQUIPO COMPARTE UNA SOLA CUENTA ACADEMY:
+
+Esto cambia varias cosas y hay que coordinarse:
+
+  1. NO PODEMOS crear IAM users ni IAM roles nuevos
+     → Usar "LabRole" en todo (Glue jobs, ejecución, etc.)
+     → La policy del LabRole ya tiene permisos amplios en Academy
+
+  2. TODAS las credenciales son compartidas entre los 3
+     → Desde el Learner Lab → "AWS Details" → Show → copiar:
+         · AWS_ACCESS_KEY_ID
+         · AWS_SECRET_ACCESS_KEY
+         · AWS_SESSION_TOKEN
+     → Rotan cada 4h — cuando uno inicia sesión, los anteriores mueren
+     → Compartirlas en un medio seguro (1Password, mensaje directo, etc.)
+
+  3. RIESGO: dos personas editando el mismo Glue Job al mismo tiempo
+     → Coordinar en chat: "estoy editando DimCustomer" antes de entrar
+     → Los scripts exportados al repo son la "source of truth"
+
+  4. CI/CD con Academy es limitado:
+     → Los secrets de GitHub Actions deben actualizarse manualmente
+       cada vez que rotan las credentials (cada 4h)
+     → RECOMENDACIÓN: workflow con "workflow_dispatch" (trigger manual)
+       para el deploy, y automático solo para los tests
+
+  5. Créditos limitados:
+     → No correr ETLs cada 5 min → mejor cada 30-60 min
+     → Apagar Glue Jobs cuando no se está probando
+     → Revisar periódicamente el uso en el dashboard del Learner Lab
+
+  6. Servicios disponibles en Academy: S3, Glue, Athena, RDS, EC2 ✅
+     Servicios NO disponibles (típicamente): IAM user creation, Secrets
+     Manager completo, algunos servicios enterprise
+
+  7. Elastic IPs ya usadas del Parcial 1 siguen válidas — no liberarlas
+
+PROTOCOLO DE COORDINACIÓN DEL EQUIPO:
+
+  Canal de Slack/WhatsApp del proyecto:
+  - Anunciar "entrando a AWS Console" antes de cualquier edit
+  - Anunciar "nueva sesión Lab iniciada" si rota el token (todos deben
+    actualizar sus ~/.aws/credentials)
+  - Anunciar "subiendo a S3 vía CI/CD" antes de dispatch manual
+
+  Archivo local por persona: ~/.aws/credentials
+  Formato:
+    [default]
+    aws_access_key_id = ASIA...
+    aws_secret_access_key = ...
+    aws_session_token = ...
+
+  Para rotar:
+  1. Ir a Learner Lab → "AWS Details" → Show AWS CLI
+  2. Copiar las 3 líneas
+  3. Pegar en ~/.aws/credentials (reemplazar)
+  4. Avisar al equipo que se rotó
+
+PROBLEMAS CONOCIDOS:
+  - Glue Connection a RDS falla si SG-RDS no permite subnet del Glue
+    → Fix: agregar regla inbound 5432 desde el mismo SG
+  - Athena requiere output location S3 — crear carpeta antes
+  - Power BI Desktop solo en Windows/Mac — usar VM si están en Linux
+  - Glue Bookmarks NO funcionan si invoice_date cambia retroactivamente
+
+
+================================================================================
+9. REFERENCIAS RÁPIDAS
+================================================================================
+
+  AWS Glue Visual ETL:
+    https://docs.aws.amazon.com/glue/latest/dg/edit-visual-job.html
+
+  AWS Glue Bookmarks (incrementalidad):
+    https://docs.aws.amazon.com/glue/latest/dg/monitor-continuations.html
+
+  Athena + S3 partitioning:
+    https://docs.aws.amazon.com/athena/latest/ug/partitions.html
+
+  Power BI + Athena ODBC:
+    https://docs.aws.amazon.com/athena/latest/ug/connect-with-odbc.html
+
+  Python holidays package:
+    https://pypi.org/project/holidays/
+
+
+================================================================================
+10. ORDEN DE EJECUCIÓN — QUIÉN DESBLOQUEA A QUIÉN
+================================================================================
+
+🔴 = bloqueante (otro espera por ti)      🟢 = independiente (nadie te espera)
+⚪ = depende de otro                      ✅ = checkpoint de sync del equipo
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  BLOQUE 1 — ARRANQUE (todos en paralelo, Alan es el único con bloqueantes)  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  # Tarea                              Persona    Estado  Depende de
+  ──────────────────────────────────────────────────────────────────────
+  A1  Crear bucket S3 chinook-datalake Alan       🔴      —
+  A2  Verificar permisos LabRole        Alan       🔴      —
+  A3  Agregar regla SG-RDS (inbound     Alan       🔴      —
+      5432 desde mismo SG)
+  A4  Crear Glue Connection "chinook-   Alan       🔴      A3
+      rds" + test connection
+  A5  Crear Glue Database chinook_dw    Alan       🔴      —
+  A6  Crear Athena Workgroup + output   Alan       🔴      A1
+      en S3/athena-results/
+  ──────────────────────────────────────────────────────────────────────
+  D1  Tutorial oficial Glue Studio      Daniela    🟢      —
+  D2  Leer docs "Visual job with join"  Daniela    🟢      —
+  D3  Dibujar diseño de sus 5 jobs      Daniela    🟢      —
+      (en papel/miro, planear sources
+      y transformaciones)
+  ──────────────────────────────────────────────────────────────────────
+  N1  dim_date_etl.py local (pandas +   Ana        🟢      —
+      holidays, sin subir a S3 aún)
+  N2  pytest test_dim_date.py           Ana        🟢      N1
+  N3  Escribir athena_ddls.sql (las     Ana        🟢      —
+      5 CREATE TABLE)
+  N4  Descargar Power BI Desktop +      Ana        🟢      —
+      driver Simba ODBC
+
+  ✅ CHECKPOINT 1: Alan avisa "Glue Connection testeada OK" + "LabRole
+                   tiene permisos Glue/S3/Athena". Daniela y Ana pueden
+                   avanzar al siguiente bloque con confianza.
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  BLOQUE 2 — ETLs BÁSICOS (todos paralelos, ya sin bloqueantes)              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  # Tarea                              Persona    Estado  Depende de
+  ──────────────────────────────────────────────────────────────────────
+  A7  provision_infra.py (boto3)       Alan       🟢      A1-A6
+  A8  deploy_jobs.py (boto3)           Alan       🟢      A7
+  A9  Empezar a diseñar FactSales en   Alan       🟢      A4
+      Glue Studio (visual)
+  ──────────────────────────────────────────────────────────────────────
+  D4  DimCustomer Visual ETL           Daniela    🟢      A4
+  D5  Exportar dim_customer_etl.py     Daniela    🟢      D4
+      a /etl/glue_jobs/
+  D6  DimTrack Visual ETL (con joins)  Daniela    🟢      A4
+  D7  Exportar dim_track_etl.py        Daniela    🟢      D6
+  ──────────────────────────────────────────────────────────────────────
+  N5  Subir dim_date_etl.py a S3       Ana        🟢      A1, N1
+  N6  Crear Glue Python Shell Job      Ana        🟢      N5
+      DimDate (primer job productivo)
+  N7  Instalar ODBC Simba + DSN        Ana        🟢      A1, A6
+      apuntando a Athena
+  N8  Ejecutar athena_ddls.sql para    Ana        🟢      N3
+      crear tablas vacías en Athena
+
+  ✅ CHECKPOINT 2: los 5 scripts exportados commiteados al repo.
+                   Daniela y Alan pueden revisar el código mutuamente.
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  BLOQUE 3 — ETLs AVANZADOS + PRIMEROS DASHBOARDS (paralelos)                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  # Tarea                              Persona    Estado  Depende de
+  ──────────────────────────────────────────────────────────────────────
+  A10 FactSales Visual ETL completo    Alan       🟢      A4, D5, D7
+      (joins con customer, track,
+      employee + DateKey + partitions)
+  A11 Exportar fact_sales_etl.py       Alan       🟢      A10
+  A12 Diseñar etl-deploy.yml           Alan       🟢      A7, A8
+      (workflow CI/CD)
+  A13 create_athena_tables.py          Alan       🟢      N3
+      (boto3 ejecuta los DDLs)
+  ──────────────────────────────────────────────────────────────────────
+  D8  DimEmployee Visual ETL           Daniela    🟢      A4
+  D9  DimEmployee History (full copy   Daniela    🟢      D8
+      con snapshot_date=yyyymmdd)
+  D10 DimCustomer History (full copy)  Daniela    🟢      D4
+  D11 Activar Job Bookmarks en Dim*    Daniela    🟢      D5, D7, D8
+  D12 Exportar dim_employee_etl.py +   Daniela    🟢      D8, D9, D10
+      history scripts
+  ──────────────────────────────────────────────────────────────────────
+  N9  Conectar Power BI Desktop a      Ana        🟢      N7, D5
+      Athena via ODBC                          (necesita data real)
+  N10 Cargar las 5 tablas en PBI +     Ana        🟢      N9, A10
+      establecer relaciones
+  N11 Dashboard 1: canciones por día   Ana        🟢      N10
+  N12 Dashboard 2: top artistas/mes    Ana        🟢      N10
+  N13 pytest test_transformations.py   Ana        🟢      D5, D7
+      (PySpark mocks)
+
+  ✅ CHECKPOINT 3: Alan ya tiene los 4 scripts boto3 + FactSales corriendo.
+                   Daniela terminó las 5 Visual ETLs. Ana tiene 2 dashboards.
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  BLOQUE 4 — INTEGRACIÓN + DASHBOARDS RESTANTES (todos paralelos)            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  # Tarea                              Persona    Estado  Depende de
+  ──────────────────────────────────────────────────────────────────────
+  A14 schedule_jobs.py (Glue Triggers  Alan       🟢      TODOS A, D
+      cada 30min)                              los scripts anteriores
+  A15 etl-deploy.yml completo          Alan       🟢      A12, N13
+      (tests + deploy a S3)
+  A16 Test end-to-end: compra en app   Alan       🔴      TODO lo anterior
+      → aparece en FactSales Athena
+      en ≤30min
+  ──────────────────────────────────────────────────────────────────────
+  D13 Test integración ETLs (correr    Daniela    🟢      A14
+      cada job, validar output S3)
+  D14 Screenshots de los Visual Jobs   Daniela    🟢      D12
+      → docs/screenshots/etl/
+  D15 Documentar bookmarks + tests en  Daniela    🟢      D11, D13
+      /etl/README.md
+  ──────────────────────────────────────────────────────────────────────
+  N14 Dashboard 3: día de semana top   Ana        🟢      N10
+  N15 Dashboard 4: mes con más ventas  Ana        🟢      N10
+  N16 Guardar chinook_analytics.pbix   Ana        🟢      N11-N15
+      en /powerbi/
+  N17 Screenshots dashboards           Ana        🟢      N16
+      → analytics/screenshots/
+
+  ✅ CHECKPOINT 4: Integración end-to-end pasa. Todos los artefactos
+                   existen en el repo.
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  BLOQUE 5 — ENTREGA (cada uno pule lo suyo, todos paralelos)                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  # Tarea                              Persona    Estado  Depende de
+  ──────────────────────────────────────────────────────────────────────
+  A17 docs/arch.drawio (diagrama       Alan       🟢      TODO
+      arquitectura final)
+  A18 Sección "Analítica" en           Alan       🟢      A14, A16
+      ONBOARDING.md
+  A19 Review final PRs del equipo      Alan       🟢      TODO
+  ──────────────────────────────────────────────────────────────────────
+  D16 Guía troubleshooting ETLs en     Daniela    🟢      D13
+      /etl/README.md
+  D17 Video de demo: correr un ETL     Daniela    🟢      D13
+      paso a paso desde Console
+  ──────────────────────────────────────────────────────────────────────
+  N18 /analytics/README.md completo    Ana        🟢      N17
+      (conexión PBI, guía dashboards)
+  N19 Preparar orden de demo de la     Ana        🟢      N17
+      sustentación
+
+
+════════════════════════════════════════════════════════════════════════════════
+RESUMEN VISUAL DE DEPENDENCIAS CRÍTICAS
+════════════════════════════════════════════════════════════════════════════════
+
+           DÍA 1              DÍA 2              DÍA 3+              FINAL
+  ─────────────────────────────────────────────────────────────────────────
+  Alan:   A1-A6 🔴        →  A7-A9        →    A10-A13         →    A14-A19
+            │                    │                  │                   │
+            ↓ (desbloquea todos) │                  │                   │
+  Daniela: D1-D3 🟢        →  D4-D7        →    D8-D12          →    D13-D17
+  (estudia)                      │                                      │
+                                 │                                      │
+  Ana:    N1-N4 🟢        →  N5-N8        →    N9-N13          →    N14-N19
+          (DimDate local)        │                                      │
+
+  Checkpoint 1: Alan Glue Conn OK → todos arrancan ETLs reales
+  Checkpoint 2: 5 Visual ETLs exportadas en repo
+  Checkpoint 3: FactSales + 2 dashboards listos
+  Checkpoint 4: Integración end-to-end funciona
+
+
+════════════════════════════════════════════════════════════════════════════════
+REGLAS PARA NO TRABAR AL EQUIPO
+════════════════════════════════════════════════════════════════════════════════
+
+  1. SIEMPRE anunciar en el chat antes de entrar a Glue Studio a editar
+     un job: "entrando a DimCustomer" / "editando FactSales"
+  2. Tras cada merge a main, correr tests localmente antes de que el CI
+     los corra — evitar romper main
+  3. Credenciales rotadas: quien las rota avisa en el chat, todos actualizan
+     su ~/.aws/credentials
+  4. Commits pequeños, PRs chicos — más fácil de revisar
+  5. Los scripts exportados de Glue Visual SON la fuente de verdad,
+     no los jobs en la Console (porque los reconstruiremos con boto3)
+  6. No tocar el parcial 1 (backend/frontend) sin avisar — impacta ETLs
+
+
+================================================================================
+11. CHECKLIST FINAL DE ENTREGA
+================================================================================
+
+  [ ] Bucket S3 "chinook-datalake" creado y poblado
+  [ ] 6 Glue Jobs creados y ejecutándose
+  [ ] 5 tablas Athena consultables
+  [ ] 4 dashboards Power BI funcionales
+  [ ] Pipeline CI/CD corriendo en cada push
+  [ ] Tests unitarios pasando al 100%
+  [ ] Documentación completa (ONBOARDING + analytics/README)
+  [ ] Diagrama de arquitectura entregable
+  [ ] Sustentación preparada (captura y orden de demo)
+
+
+================================================================================
+FIN DEL PLAN
+================================================================================
