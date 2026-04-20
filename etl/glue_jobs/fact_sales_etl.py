@@ -1,5 +1,4 @@
 import sys
-from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
@@ -16,39 +15,33 @@ job         = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
 # ── CONFIG ───────────────────────────────────────────────────────────────────
-CONNECTION  = "chinook-rds"
+JDBC_URL    = "jdbc:postgresql://chinook-db.cbi3bser5ehz.us-east-1.rds.amazonaws.com:5432/chinook"
+JDBC_PROPS  = {
+    "user":   "postgres",
+    "password": "Parcial1",
+    "driver": "org.postgresql.Driver",
+}
 GLUE_DB     = "chinook_dw"
 BUCKET      = "chinook-datalake-academy"
 TARGET_PATH = f"s3://{BUCKET}/fact_sales/"
 # ─────────────────────────────────────────────────────────────────────────────
 
-def read_jdbc(table: str) -> DynamicFrame:
-    return glueContext.create_dynamic_frame.from_options(
-        connection_type="jdbc",
-        connection_options={
-            "useConnectionProperties": "true",
-            "dbtable": table,
-            "connectionName": CONNECTION,
-        },
-        transformation_ctx=f"src_{table}",
-    )
+def read_table(table: str):
+    return spark.read.jdbc(url=JDBC_URL, table=table, properties=JDBC_PROPS)
 
 
-# ── 1. Leer tablas fuente ────────────────────────────────────────────────────
-invoice_line_df = read_jdbc("invoice_line").toDF()
-invoice_df      = read_jdbc("invoice").toDF()
-customer_df     = read_jdbc("customer").toDF()
-employee_df     = read_jdbc("employee").toDF()
+# ── 1. Leer tablas fuente (PySpark nativo, sin Glue connection catalog) ──────
+invoice_line_df = read_table("invoice_line")
+invoice_df      = read_table("invoice")
+customer_df     = read_table("customer")
 
 # ── 2. Joins ─────────────────────────────────────────────────────────────────
-# invoice_line → invoice
 fact = invoice_line_df.join(
     invoice_df.select("invoice_id", "customer_id", "invoice_date"),
     on="invoice_id",
     how="inner",
 )
 
-# → customer (para obtener support_rep_id = EmployeeKey)
 fact = fact.join(
     customer_df.select("customer_id", "support_rep_id"),
     on="customer_id",
@@ -72,7 +65,7 @@ fact = (
     .withColumn("day",   F.dayofmonth("invoice_date").cast("int"))
 )
 
-# ── 4. Selección y renombrado de columnas finales ────────────────────────────
+# ── 4. Columnas finales ──────────────────────────────────────────────────────
 fact = fact.select(
     F.col("customer_id").alias("CustomerKey"),
     F.col("track_id").alias("TrackKey"),
