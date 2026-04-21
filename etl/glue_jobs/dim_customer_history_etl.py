@@ -7,71 +7,59 @@ Bookmark: DESACTIVADO — debe copiar TODOS los clientes en cada ejecución
 """
 
 import sys
-from datetime import datetime
 from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
-from pyspark.sql.functions import lit
+from awsgluedq.transforms import EvaluateDataQuality
+from awsglue import DynamicFrame
 
-# ── Inicialización ──────────────────────────────────────────────────────────
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
-sc   = SparkContext()
+def sparkSqlQuery(glueContext, query, mapping, transformation_ctx) -> DynamicFrame:
+    for alias, frame in mapping.items():
+        frame.toDF().createOrReplaceTempView(alias)
+    result = spark.sql(query)
+    return DynamicFrame.fromDF(result, glueContext, transformation_ctx)
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
-job   = Job(glueContext)
-job.init(args["JOB_NAME"], args)
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
 
-# Fecha de hoy como entero yyyymmdd (ej: 20260421)
-snapshot_date = int(datetime.today().strftime("%Y%m%d"))
+# Default ruleset used by all target nodes with data quality enabled
+DEFAULT_DATA_QUALITY_RULESET = """
+    Rules = [
+        ColumnCount > 0
+    ]
+"""
 
-# ── 1. SOURCE — Leer tabla customer desde RDS ───────────────────────────────
-# SIN transformation_ctx para que NO use Job Bookmark (full copy siempre)
-customer_node = glueContext.create_dynamic_frame.from_options(
-    connection_type="postgresql",
-    connection_options={
+# Script generated for node customer_source
+customer_source_node1776806820391 = glueContext.create_dynamic_frame.from_options(
+    connection_type = "postgresql",
+    connection_options = {
         "useConnectionProperties": "true",
         "dbtable": "public.customer",
         "connectionName": "chinook-rds",
     },
+    transformation_ctx = "customer_source_node1776806820391"
 )
 
-# ── 2. APPLYMAPPING — Renombrar y tipar columnas ────────────────────────────
-mapped_node = ApplyMapping.apply(
-    frame=customer_node,
-    mappings=[
-        ("customer_id", "int",    "CustomerKey", "int"),
-        ("first_name",  "string", "FirstName",   "string"),
-        ("last_name",   "string", "LastName",    "string"),
-        ("company",     "string", "Company",     "string"),
-        ("country",     "string", "Country",     "string"),
-        ("city",        "string", "City",        "string"),
-        ("state",       "string", "State",       "string"),
-        ("email",       "string", "Email",       "string"),
-    ],
-)
+# Script generated for node Change Schema
+ChangeSchema_node1776806897516 = ApplyMapping.apply(frame=customer_source_node1776806820391, mappings=[("customer_id", "int", "customer_id", "int"), ("first_name", "string", "first_name", "string"), ("last_name", "string", "last_name", "string"), ("company", "string", "company", "string"), ("city", "string", "city", "string"), ("state", "string", "state", "string"), ("country", "string", "country", "string"), ("email", "string", "email", "string")], transformation_ctx="ChangeSchema_node1776806897516")
 
-# ── 3. AGREGAR snapshot_date como columna ──────────────────────────────────
-# Convertir a DataFrame Spark para agregar la columna, luego volver a DynamicFrame
-df = mapped_node.toDF()
-df = df.withColumn("snapshot_date", lit(snapshot_date))
-snapshot_node = DynamicFrame.fromDF(df, glueContext, "snapshot_node")
+# Script generated for node SQL Query
+SqlQuery0 = '''
+SELECT *,
+  CAST(date_format(current_date, 'yyyyMMdd') AS INT) AS snapshot_date
+FROM myDataSource
+'''
+SQLQuery_node1776807121547 = sparkSqlQuery(glueContext, query = SqlQuery0, mapping = {"myDataSource":ChangeSchema_node1776806897516}, transformation_ctx = "SQLQuery_node1776807121547")
 
-# ── 4. TARGET — Escribir en S3 particionado por snapshot_date ──────────────
-glueContext.write_dynamic_frame.from_options(
-    frame=snapshot_node,
-    connection_type="s3",
-    format="glueparquet",
-    connection_options={
-        "path": "s3://chinook-datalake-academy/dim_customer_history/",
-        "partitionKeys": ["snapshot_date"],  # crea carpeta snapshot_date=20260421/
-    },
-    format_options={
-        "compression": "snappy",
-        "useGlueParquetWriter": True,
-    },
-)
-
-# ── Commit (sin bookmark activo) ────────────────────────────────────────────
+# Script generated for node dim_customer_history_target
+EvaluateDataQuality().process_rows(frame=SQLQuery_node1776807121547, ruleset=DEFAULT_DATA_QUALITY_RULESET, publishing_options={"dataQualityEvaluationContext": "EvaluateDataQuality_node1776804912821", "enableDataQualityResultsPublishing": True}, additional_options={"dataQualityResultsPublishing.strategy": "BEST_EFFORT", "observations.scope": "ALL"})
+dim_customer_history_target_node1776807180641 = glueContext.getSink(path="s3://chinook-datalake-academy/dim_customer_history/", connection_type="s3", updateBehavior="UPDATE_IN_DATABASE", partitionKeys=["snapshot_date"], enableUpdateCatalog=True, transformation_ctx="dim_customer_history_target_node1776807180641")
+dim_customer_history_target_node1776807180641.setCatalogInfo(catalogDatabase="chinook_dw",catalogTableName="dim_customer_history")
+dim_customer_history_target_node1776807180641.setFormat("glueparquet", compression="snappy")
+dim_customer_history_target_node1776807180641.writeFrame(SQLQuery_node1776807121547)
 job.commit()

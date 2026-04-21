@@ -12,59 +12,40 @@ from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
+from awsgluedq.transforms import EvaluateDataQuality
 
-# ── Inicialización ──────────────────────────────────────────────────────────
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
-sc   = SparkContext()
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
-job   = Job(glueContext)
-job.init(args["JOB_NAME"], args)
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
 
-# ── 1. SOURCE — Leer tabla customer desde RDS vía Glue Connection ───────────
-customer_node = glueContext.create_dynamic_frame.from_options(
-    connection_type="postgresql",
-    connection_options={
+# Default ruleset used by all target nodes with data quality enabled
+DEFAULT_DATA_QUALITY_RULESET = """
+    Rules = [
+        ColumnCount > 0
+    ]
+"""
+
+# Script generated for node customer_source
+customer_source_node1776805371815 = glueContext.create_dynamic_frame.from_options(
+    connection_type = "postgresql",
+    connection_options = {
         "useConnectionProperties": "true",
         "dbtable": "public.customer",
-        "connectionName": "chinook-rds",  # nombre exacto de la Glue Connection
+        "connectionName": "chinook-rds",
     },
-    transformation_ctx="customer_node",  # necesario para el Job Bookmark
+    transformation_ctx = "customer_source_node1776805371815"
 )
 
-# ── 2. APPLYMAPPING — Renombrar y tipar columnas ────────────────────────────
-mapped_node = ApplyMapping.apply(
-    frame=customer_node,
-    mappings=[
-        ("customer_id", "int",    "CustomerKey", "int"),
-        ("first_name",  "string", "FirstName",   "string"),
-        ("last_name",   "string", "LastName",    "string"),
-        ("company",     "string", "Company",     "string"),
-        ("country",     "string", "Country",     "string"),
-        ("city",        "string", "City",        "string"),
-        ("state",       "string", "State",       "string"),
-        ("email",       "string", "Email",       "string"),
-        # Columnas que NO aparecen aquí son descartadas automáticamente:
-        # address, postal_code, phone, fax, support_rep_id
-    ],
-    transformation_ctx="mapped_node",
-)
+# Script generated for node Change Schema
+ChangeSchema_node1776805427812 = ApplyMapping.apply(frame=customer_source_node1776805371815, mappings=[("customer_id", "int", "customer_id", "int"), ("first_name", "string", "first_name", "string"), ("last_name", "string", "last_name", "string"), ("company", "string", "company", "string"), ("city", "string", "city", "string"), ("state", "string", "state", "string"), ("country", "string", "country", "string"), ("email", "string", "email", "string")], transformation_ctx="ChangeSchema_node1776805427812")
 
-# ── 3. TARGET — Escribir en S3 como Parquet (Snappy) ───────────────────────
-glueContext.write_dynamic_frame.from_options(
-    frame=mapped_node,
-    connection_type="s3",
-    format="glueparquet",
-    connection_options={
-        "path": "s3://chinook-datalake-academy/dim_customer/",
-        "partitionKeys": [],        # sin particionamiento (tabla pequeña)
-    },
-    format_options={
-        "compression": "snappy",
-        "useGlueParquetWriter": True,
-    },
-    transformation_ctx="target_node",
-)
-
-# ── Commit del Job Bookmark ─────────────────────────────────────────────────
+# Script generated for node dim_customer_target
+EvaluateDataQuality().process_rows(frame=ChangeSchema_node1776805427812, ruleset=DEFAULT_DATA_QUALITY_RULESET, publishing_options={"dataQualityEvaluationContext": "EvaluateDataQuality_node1776804912821", "enableDataQualityResultsPublishing": True}, additional_options={"dataQualityResultsPublishing.strategy": "BEST_EFFORT", "observations.scope": "ALL"})
+dim_customer_target_node1776805782916 = glueContext.getSink(path="s3://chinook-datalake-academy/dim_customer/", connection_type="s3", updateBehavior="UPDATE_IN_DATABASE", partitionKeys=[], enableUpdateCatalog=True, transformation_ctx="dim_customer_target_node1776805782916")
+dim_customer_target_node1776805782916.setCatalogInfo(catalogDatabase="chinook_dw",catalogTableName="dim_customer")
+dim_customer_target_node1776805782916.setFormat("glueparquet", compression="snappy")
+dim_customer_target_node1776805782916.writeFrame(ChangeSchema_node1776805427812)
 job.commit()

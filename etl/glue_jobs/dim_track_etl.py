@@ -1,11 +1,8 @@
 """
-DimTrack ETL — AWS Glue Visual Job (exportado)
+DimTrack ETL — AWS Glue Visual Job (exportado y corregido)
 Fuente : RDS PostgreSQL tablas:
-            public.track
-            public.album
-            public.artist
-            public.genre
-            public.media_type
+            public.track, public.album, public.artist,
+            public.genre, public.media_type
 Destino: s3://chinook-datalake-academy/dim_track/
 Modo   : Overwrite (siempre el estado actual)
 Bookmark: ACTIVADO — solo procesa tracks nuevos en cada ejecución
@@ -17,109 +14,140 @@ from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
 from pyspark.sql.functions import col
 
-# ── Inicialización ──────────────────────────────────────────────────────────
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
-sc   = SparkContext()
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
-job   = Job(glueContext)
-job.init(args["JOB_NAME"], args)
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
 
-# ── Función helper para leer tablas desde RDS ───────────────────────────────
-def read_table(table_name, ctx=None):
-    options = {
+# ── 1. SOURCES — Leer las 5 tablas desde RDS ───────────────────────────────
+
+track_source = glueContext.create_dynamic_frame.from_options(
+    connection_type="postgresql",
+    connection_options={
         "useConnectionProperties": "true",
-        "dbtable": f"public.{table_name}",
+        "dbtable": "public.track",
         "connectionName": "chinook-rds",
-    }
-    if ctx:
-        return glueContext.create_dynamic_frame.from_options(
-            connection_type="postgresql",
-            connection_options=options,
-            transformation_ctx=ctx,
-        )
-    return glueContext.create_dynamic_frame.from_options(
-        connection_type="postgresql",
-        connection_options=options,
-    )
+    },
+    transformation_ctx="track_source"
+)
 
-# ── 1. SOURCE — Leer las 5 tablas desde RDS ────────────────────────────────
-# track usa transformation_ctx para el Job Bookmark
-track_node      = read_table("track",      ctx="track_node")
-album_node      = read_table("album")
-artist_node     = read_table("artist")
-genre_node      = read_table("genre")
-media_type_node = read_table("media_type")
+album_source = glueContext.create_dynamic_frame.from_options(
+    connection_type="postgresql",
+    connection_options={
+        "useConnectionProperties": "true",
+        "dbtable": "public.album",
+        "connectionName": "chinook-rds",
+    },
+    transformation_ctx="album_source"
+)
 
-# Convertir a DataFrames Spark para hacer los JOINs fácilmente
-track_df      = track_node.toDF()
-album_df      = album_node.toDF()
-artist_df     = artist_node.toDF()
-genre_df      = genre_node.toDF()
-media_type_df = media_type_node.toDF()
+artist_source = glueContext.create_dynamic_frame.from_options(
+    connection_type="postgresql",
+    connection_options={
+        "useConnectionProperties": "true",
+        "dbtable": "public.artist",
+        "connectionName": "chinook-rds",
+    },
+    transformation_ctx="artist_source"
+)
 
-# ── 2. JOINs — Enriquecer track con las tablas de referencia ───────────────
+genre_source = glueContext.create_dynamic_frame.from_options(
+    connection_type="postgresql",
+    connection_options={
+        "useConnectionProperties": "true",
+        "dbtable": "public.genre",
+        "connectionName": "chinook-rds",
+    },
+    transformation_ctx="genre_source"
+)
 
-# Join 1: track ⟕ album  (para obtener el título del álbum)
+media_type_source = glueContext.create_dynamic_frame.from_options(
+    connection_type="postgresql",
+    connection_options={
+        "useConnectionProperties": "true",
+        "dbtable": "public.media_type",
+        "connectionName": "chinook-rds",
+    },
+    transformation_ctx="media_type_source"
+)
+
+# ── 2. Convertir a DataFrames y renombrar columnas ANTES de los JOINs ──────
+# Esto evita el problema de columnas duplicadas llamadas "name" y "artist_id"
+
+track_df = track_source.toDF()
+
+album_df = album_source.toDF().select(
+    col("album_id").alias("album_album_id"),
+    col("title").alias("Album"),
+    col("artist_id").alias("album_artist_id")
+)
+
+artist_df = artist_source.toDF().select(
+    col("artist_id").alias("artist_artist_id"),
+    col("name").alias("Artist")
+)
+
+genre_df = genre_source.toDF().select(
+    col("genre_id").alias("genre_genre_id"),
+    col("name").alias("Genre")
+)
+
+media_type_df = media_type_source.toDF().select(
+    col("media_type_id").alias("media_type_media_type_id"),
+    col("name").alias("MediaType")
+)
+
+# ── 3. JOINs encadenados ────────────────────────────────────────────────────
+
+# Join 1: track ⟕ album
 joined_df = track_df.join(
-    album_df.select(
-        col("album_id"),
-        col("title").alias("album_title"),
-        col("artist_id"),
-    ),
-    on="album_id",
-    how="left",
+    album_df,
+    track_df["album_id"] == album_df["album_album_id"],
+    "left"
 )
 
-# Join 2: resultado ⟕ artist  (para obtener el nombre del artista)
+# Join 2: resultado ⟕ artist
 joined_df = joined_df.join(
-    artist_df.select(
-        col("artist_id"),
-        col("name").alias("artist_name"),
-    ),
-    on="artist_id",
-    how="left",
+    artist_df,
+    joined_df["album_artist_id"] == artist_df["artist_artist_id"],
+    "left"
 )
 
-# Join 3: resultado ⟕ genre  (para obtener el nombre del género)
+# Join 3: resultado ⟕ genre
 joined_df = joined_df.join(
-    genre_df.select(
-        col("genre_id"),
-        col("name").alias("genre_name"),
-    ),
-    on="genre_id",
-    how="left",
+    genre_df,
+    joined_df["genre_id"] == genre_df["genre_genre_id"],
+    "left"
 )
 
-# Join 4: resultado ⟕ media_type  (para obtener el tipo de medio)
+# Join 4: resultado ⟕ media_type
 joined_df = joined_df.join(
-    media_type_df.select(
-        col("media_type_id"),
-        col("name").alias("media_type_name"),
-    ),
-    on="media_type_id",
-    how="left",
+    media_type_df,
+    joined_df["media_type_id"] == media_type_df["media_type_media_type_id"],
+    "left"
 )
 
-# ── 3. SELECCIONAR y renombrar solo las columnas del modelo ─────────────────
+# ── 4. Seleccionar solo las columnas finales del modelo ─────────────────────
 dim_track_df = joined_df.select(
     col("track_id").alias("TrackKey"),
-    col("name").alias("Name"),               # nombre de la canción (de track)
-    col("album_title").alias("Album"),
-    col("artist_name").alias("Artist"),
-    col("genre_name").alias("Genre"),
-    col("media_type_name").alias("MediaType"),
+    col("name").alias("Name"),
+    col("Album"),
+    col("Artist"),
+    col("Genre"),
+    col("MediaType"),
     col("composer").alias("Composer"),
-    col("milliseconds").alias("Milliseconds"),
+    col("milliseconds").alias("Milliseconds")
 )
 
-# ── 4. Convertir de vuelta a DynamicFrame ──────────────────────────────────
-from awsglue.dynamicframe import DynamicFrame
+# ── 5. Convertir de vuelta a DynamicFrame ──────────────────────────────────
 result_node = DynamicFrame.fromDF(dim_track_df, glueContext, "result_node")
 
-# ── 5. TARGET — Escribir en S3 como Parquet (Snappy) ───────────────────────
+# ── 6. TARGET — Escribir en S3 como Parquet (Snappy) ───────────────────────
 glueContext.write_dynamic_frame.from_options(
     frame=result_node,
     connection_type="s3",
@@ -132,7 +160,7 @@ glueContext.write_dynamic_frame.from_options(
         "compression": "snappy",
         "useGlueParquetWriter": True,
     },
-    transformation_ctx="target_node",
+    transformation_ctx="target_node"
 )
 
 # ── Commit del Job Bookmark ─────────────────────────────────────────────────

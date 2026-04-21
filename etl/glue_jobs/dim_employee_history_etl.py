@@ -8,75 +8,59 @@ Propósito: Preservar histórico de la jerarquía ReportsTo a lo largo del tiemp
 """
 
 import sys
-from datetime import datetime
 from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
-from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import lit
+from awsgluedq.transforms import EvaluateDataQuality
+from awsglue import DynamicFrame
 
-# ── Inicialización ──────────────────────────────────────────────────────────
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
-sc   = SparkContext()
+def sparkSqlQuery(glueContext, query, mapping, transformation_ctx) -> DynamicFrame:
+    for alias, frame in mapping.items():
+        frame.toDF().createOrReplaceTempView(alias)
+    result = spark.sql(query)
+    return DynamicFrame.fromDF(result, glueContext, transformation_ctx)
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
-job   = Job(glueContext)
-job.init(args["JOB_NAME"], args)
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
 
-# Fecha de hoy como entero yyyymmdd (ej: 20260421)
-snapshot_date = int(datetime.today().strftime("%Y%m%d"))
+# Default ruleset used by all target nodes with data quality enabled
+DEFAULT_DATA_QUALITY_RULESET = """
+    Rules = [
+        ColumnCount > 0
+    ]
+"""
 
-# ── 1. SOURCE — Leer tabla employee desde RDS ───────────────────────────────
-# SIN transformation_ctx para que NO use Job Bookmark (full copy siempre)
-employee_node = glueContext.create_dynamic_frame.from_options(
-    connection_type="postgresql",
-    connection_options={
+# Script generated for node employee_source
+employee_source_node1776811567455 = glueContext.create_dynamic_frame.from_options(
+    connection_type = "postgresql",
+    connection_options = {
         "useConnectionProperties": "true",
         "dbtable": "public.employee",
         "connectionName": "chinook-rds",
     },
+    transformation_ctx = "employee_source_node1776811567455"
 )
 
-# ── 2. APPLYMAPPING — Renombrar y tipar columnas ────────────────────────────
-# Las columnas no listadas se descartan automáticamente:
-# address, city, state, country, postal_code, phone, fax, birth_date
-mapped_node = ApplyMapping.apply(
-    frame=employee_node,
-    mappings=[
-        ("employee_id", "int",    "EmployeeKey", "int"),
-        ("first_name",  "string", "FirstName",   "string"),
-        ("last_name",   "string", "LastName",    "string"),
-        ("title",       "string", "Title",       "string"),
-        ("reports_to",  "int",    "ReportsTo",   "int"),   # FK auto-referencia
-        ("hire_date",   "string", "HireDate",    "string"),
-        ("email",       "string", "Email",       "string"),
-    ],
-)
+# Script generated for node Change Schema
+ChangeSchema_node1776811606783 = ApplyMapping.apply(frame=employee_source_node1776811567455, mappings=[("employee_id", "int", "EmployeeKey", "int"), ("last_name", "string", "LastName", "string"), ("first_name", "string", "FirstName", "string"), ("title", "string", "Title", "string"), ("reports_to", "int", "ReportsTo", "int"), ("hire_date", "timestamp", "HireDate", "timestamp"), ("email", "string", "Email", "string")], transformation_ctx="ChangeSchema_node1776811606783")
 
-# ── 3. AGREGAR snapshot_date como columna ──────────────────────────────────
-# Convertir a DataFrame Spark para agregar la columna, luego volver a DynamicFrame
-df = mapped_node.toDF()
-df = df.withColumn("snapshot_date", lit(snapshot_date))
-snapshot_node = DynamicFrame.fromDF(df, glueContext, "snapshot_node")
+# Script generated for node SQL Query
+SqlQuery0 = '''
+SELECT *,
+  CAST(date_format(current_date, 'yyyyMMdd') AS INT) AS snapshot_date
+FROM myDataSource
+'''
+SQLQuery_node1776811789941 = sparkSqlQuery(glueContext, query = SqlQuery0, mapping = {"myDataSource":ChangeSchema_node1776811606783}, transformation_ctx = "SQLQuery_node1776811789941")
 
-# ── 4. TARGET — Escribir en S3 particionado por snapshot_date ──────────────
-# Cada ejecución crea una nueva carpeta: snapshot_date=20260421/
-# Las carpetas anteriores NO se tocan (modo append implícito por partición)
-glueContext.write_dynamic_frame.from_options(
-    frame=snapshot_node,
-    connection_type="s3",
-    format="glueparquet",
-    connection_options={
-        "path": "s3://chinook-datalake-academy/dim_employee_history/",
-        "partitionKeys": ["snapshot_date"],  # crea carpeta snapshot_date=YYYYMMDD/
-    },
-    format_options={
-        "compression": "snappy",
-        "useGlueParquetWriter": True,
-    },
-)
-
-# ── Commit (sin bookmark activo) ────────────────────────────────────────────
+# Script generated for node dim_employee_history_target
+EvaluateDataQuality().process_rows(frame=SQLQuery_node1776811789941, ruleset=DEFAULT_DATA_QUALITY_RULESET, publishing_options={"dataQualityEvaluationContext": "EvaluateDataQuality_node1776810737330", "enableDataQualityResultsPublishing": True}, additional_options={"dataQualityResultsPublishing.strategy": "BEST_EFFORT", "observations.scope": "ALL"})
+dim_employee_history_target_node1776811835510 = glueContext.getSink(path="s3://chinook-datalake-academy/dim_employee_history/", connection_type="s3", updateBehavior="UPDATE_IN_DATABASE", partitionKeys=["snapshot_date"], enableUpdateCatalog=True, transformation_ctx="dim_employee_history_target_node1776811835510")
+dim_employee_history_target_node1776811835510.setCatalogInfo(catalogDatabase="chinook_dw",catalogTableName="dim_employee_history")
+dim_employee_history_target_node1776811835510.setFormat("glueparquet", compression="snappy")
+dim_employee_history_target_node1776811835510.writeFrame(SQLQuery_node1776811789941)
 job.commit()
