@@ -24,6 +24,7 @@ Destinada a nuevos integrantes del equipo o para migrar la infraestructura a una
 11. [Cómo correr los tests](#11-cómo-correr-los-tests)
 12. [Guía de re-despliegue en nueva cuenta AWS](#12-guía-de-re-despliegue-en-nueva-cuenta-aws)
 13. [Problemas conocidos y notas importantes](#13-problemas-conocidos-y-notas-importantes)
+14. [Capa Analítica — ETL + Athena + Power BI](#14-capa-analítica--etl--athena--power-bi)
 
 ---
 
@@ -778,3 +779,126 @@ VALUES ('admin@chinook.com', '<HASH_COPIADO>', 'admin', NOW());
 **Archivo:** `backend/app/main.py`  
 **Configuración:** `allow_origins=["*"]`  
 **Riesgo:** En producción real, restringir al dominio del frontend.
+
+---
+
+## 14. Capa Analítica — ETL + Athena + Power BI
+
+Parcial 2 agrega una capa analítica sobre el OLTP del Parcial 1.  
+Responde 4 preguntas: canciones vendidas por día, artista más vendido por mes, día de semana con más compras, mes con mayor número de ventas.
+
+### Recursos AWS creados
+
+| Recurso | Nombre | Descripción |
+|---|---|---|
+| S3 Bucket | `chinook-datalake-academy` | Almacena Parquet particionados |
+| Glue Database | `chinook_dw` | Catálogo de tablas analíticas |
+| Glue Connection | `chinook-rds` | Conexión JDBC al RDS |
+| Glue Job | `fact-sales-etl` | ETL principal (+ jobs de Daniela y Ana) |
+| Athena Workgroup | `chinook-wg` | Queries SQL sobre S3 |
+| IAM Role | `LabRole` | Rol compartido de Academy (no se crea, ya existe) |
+
+### Estructura de carpetas
+
+```
+infra/                    # Scripts boto3 de infraestructura (Alan)
+  provision_infra.py      # Crea toda la infra — idempotente
+  deploy_jobs.py          # Sube ETLs a S3 y crea/actualiza Glue Jobs
+  create_athena_tables.py # Ejecuta DDLs en Athena
+  schedule_jobs.py        # Crea Glue Triggers horarios
+  tear_down.py            # Borra toda la infra analítica
+
+etl/
+  glue_jobs/              # Scripts Glue Spark (Daniela + Alan)
+    fact_sales_etl.py
+    dim_customer_etl.py   ...
+  python_jobs/            # Scripts Python Shell (Ana)
+    dim_date_etl.py
+  tests/                  # pytest (Ana)
+```
+
+### Primera vez: levantar la infra desde cero
+
+```bash
+# 1. Ir al proyecto
+cd Parcial_BigData_Corte1
+
+# 2. Crear entorno virtual e instalar boto3
+python3 -m venv .venv && .venv/bin/pip install boto3
+
+# 3. Copiar credenciales de Academy a ~/.aws/credentials
+#    (ver sección "Renovar credenciales" abajo)
+
+# 4. Levantar toda la infraestructura
+.venv/bin/python infra/provision_infra.py
+
+# 5. Subir scripts ETL y crear Glue Jobs
+.venv/bin/python infra/deploy_jobs.py
+
+# 6. Crear tablas en Athena (una vez Ana entregue athena_ddls.sql)
+.venv/bin/python infra/create_athena_tables.py
+```
+
+### Renovar credenciales de Academy (rotan cada 4h)
+
+1. Abrir **AWS Academy Learner Lab** → **Start Lab** → esperar luz verde
+2. Clic en **AWS Details** → **Show AWS CLI**
+3. Copiar las 3 líneas y pegarlas en `~/.aws/credentials`:
+
+```ini
+[default]
+aws_access_key_id = ASIA...
+aws_secret_access_key = ...
+aws_session_token = ...
+```
+
+4. Avisar al equipo en el chat: _"credenciales rotadas — actualicen ~/.aws/credentials"_
+
+> Las credenciales también se usan en GitHub Actions Secrets  
+> (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`).  
+> Actualizarlas manualmente antes de cada deploy manual.
+
+### Correr ETLs manualmente desde Glue Console
+
+1. Ir a **AWS Glue → Jobs**
+2. Seleccionar el job deseado (ej: `fact-sales-etl`)
+3. Clic en **Run**
+4. Monitorear en **Runs** → esperar estado `Succeeded` (~3-5 min)
+5. Verificar datos en **Athena Console** → workgroup `chinook-wg`:
+
+```sql
+SELECT COUNT(*) FROM chinook_dw.fact_sales;
+SELECT year, COUNT(*) FROM chinook_dw.fact_sales GROUP BY year;
+```
+
+### Desplegar scripts actualizados
+
+Cuando se modifica cualquier ETL, redesplegar con:
+
+```bash
+.venv/bin/python infra/deploy_jobs.py
+```
+
+O via GitHub Actions (trigger manual):  
+`GitHub repo → Actions → ETL Analytics Pipeline → Run workflow → deploy: true`
+
+### Activar scheduling automático
+
+Los triggers están creados pero **apagados** por defecto (para ahorrar créditos Academy).  
+Activarlos cuando todos los ETLs estén validados:
+
+```bash
+.venv/bin/python infra/schedule_jobs.py
+# Luego activar cada trigger en Glue Console → Triggers → Enable
+```
+
+Cadencia configurada: cada hora, escalonados 5 min entre jobs.
+
+### Tear down completo
+
+```bash
+.venv/bin/python infra/tear_down.py
+# Pide confirmación: escribir CONFIRMAR
+```
+
+Elimina bucket S3, Glue Jobs, Conexión, DB, Athena WG y SG de Glue.
