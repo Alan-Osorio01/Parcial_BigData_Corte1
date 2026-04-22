@@ -79,20 +79,17 @@ fact = fact.select(
     F.col("day"),
 )
 
-# ── 5. Escribir a S3 particionado ────────────────────────────────────────────
-fact_dyf = DynamicFrame.fromDF(fact, glueContext, "fact_sales_output")
+# ── 5. Escribir a S3 particionado en modo OVERWRITE ──────────────────────────
+# Sin Glue Bookmarks (spark.read.jdbc no los soporta), sobrescribimos todo
+# en cada ejecución para evitar duplicados.
+spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
 
-sink = glueContext.getSink(
-    path=TARGET_PATH,
-    connection_type="s3",
-    updateBehavior="UPDATE_IN_DATABASE",
-    partitionKeys=["year", "month", "day"],
-    compression="snappy",
-    enableUpdateCatalog=True,
-    transformation_ctx="sink_fact_sales",
+(
+    fact.write
+        .mode("overwrite")
+        .partitionBy("year", "month", "day")
+        .option("compression", "snappy")
+        .parquet(TARGET_PATH)
 )
-sink.setCatalogInfo(catalogDatabase=GLUE_DB, catalogTableName="fact_sales")
-sink.setFormat("glueparquet")
-sink.writeFrame(fact_dyf)
 
 job.commit()
