@@ -1,172 +1,327 @@
-# 🎵 Chinook Music Store
+# Chinook Music Store — Big Data
 
-Gestión y compra de canciones en línea basada en la base de datos **Chinook**, desplegada en **AWS** con un pipeline de **CI/CD automatizado**.
+Proyecto completo del curso de Big Data (Semestre 8) que cubre dos parciales:
 
----
+1. **Parcial 1 — Aplicación OLTP:** tienda de música Full Stack (React + FastAPI + RDS PostgreSQL) desplegada en AWS con CI/CD.
+2. **Parcial 2 — Capa Analítica:** Data Warehouse con modelo estrella en S3 + AWS Glue + Athena + Power BI, alimentado desde el OLTP del Parcial 1.
 
-# 📖 Descripción
-
-**Chinook Music Store** es una aplicación web **Full Stack** que permite a los usuarios:
-
-- Explorar el catálogo musical de la base de datos Chinook
-- Buscar canciones por **nombre, artista o género**
-- Realizar **compras en línea**
-- Gestionar **autenticación con roles (admin / usuario)**
-
-La aplicación incluye validación de formularios, rutas protegidas y notificaciones de las operaciones realizadas por el usuario.
+**Autores:** Alan Osorio · Daniela López · Ana Amador  
+**Curso:** Big Data — Semestre 8
 
 ---
 
-# 🏗️ Arquitectura
+## Arquitectura global
 
-```mermaid
-graph TD
-
-    User((Usuario))
-
-    subgraph AWS Cloud
-        direction TB
-
-        subgraph Public Subnet
-            EC2_FE[EC2 #1<br>Frontend<br>React + Vite]
-            EC2_BE[EC2 #2<br>Backend<br>FastAPI]
-        end
-
-        subgraph Private Subnet
-            RDS[(RDS PostgreSQL<br>Chinook Database)]
-        end
-    end
-
-    User --> EC2_FE
-    EC2_FE <--> EC2_BE
-    EC2_BE <--> RDS
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                            AWS Cloud                                  │
+│                                                                       │
+│  ┌─────────────── PARCIAL 1 — OLTP ─────────────────┐                │
+│  │                                                    │                │
+│  │   Usuario → EC2 Frontend (React+Nginx)            │                │
+│  │                 │                                   │                │
+│  │                 ▼                                   │                │
+│  │         EC2 Backend (FastAPI)                      │                │
+│  │                 │                                   │                │
+│  │                 ▼                                   │                │
+│  │       RDS PostgreSQL — Chinook DB                  │                │
+│  │       (invoice, track, customer, employee...)      │                │
+│  └─────────────────┬──────────────────────────────────┘                │
+│                    │                                                   │
+│                    │  (JDBC)                                           │
+│                    ▼                                                   │
+│  ┌──────────── PARCIAL 2 — ANALÍTICA ─────────────────┐                │
+│  │                                                     │                │
+│  │   AWS Glue                                          │                │
+│  │     ├─ Visual ETL: DimCustomer, DimTrack, DimEmp.   │                │
+│  │     ├─ Python Shell: DimDate (paquete holidays)     │                │
+│  │     └─ Spark ETL: FactSales (joins + partitions)    │                │
+│  │            │                                         │                │
+│  │            ▼                                         │                │
+│  │   S3 Data Lake (Parquet particionado y/m/d)         │                │
+│  │            │                                         │                │
+│  │            ▼                                         │                │
+│  │   Glue Data Catalog (chinook_dw)                    │                │
+│  │            │                                         │                │
+│  │            ▼                                         │                │
+│  │   Athena (workgroup chinook-wg)                     │                │
+│  │            │                                         │                │
+│  │            ▼                                         │                │
+│  │   Power BI Desktop — 4 Dashboards                   │                │
+│  └─────────────────────────────────────────────────────┘                │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-> **Seguridad:**  
-> La base de datos **RDS** se encuentra en una **subred privada**, siendo accesible únicamente por la instancia **Backend** mediante reglas de **Security Groups**.
+Diagrama editable: [`docs/arch.drawio`](./docs/arch.drawio)
 
 ---
 
-# 🛠️ Tecnologías
+## Preguntas de negocio que responde
 
-## Frontend
+La capa analítica contesta las 4 preguntas del parcial, consultables en Athena:
 
-| Tecnología | Versión | Uso |
-|---|---|---|
-| React | 18.x | Framework UI |
-| Vite | 5.x | Build tool |
-| React Router DOM | 6.x | Navegación |
-| Axios | 1.x | Consumo de API |
-| Vitest | 2.1.9 | Pruebas unitarias |
-| React Testing Library | 14.x | Testing de componentes |
+1. **Canciones vendidas por día** — `SUM(Quantity)` agrupado por `DimDate.FullDate`
+2. **Artista más vendido por mes** — Join de `FactSales + DimDate + DimTrack`
+3. **Día de la semana con más compras** — Agrupado por `DimDate.DayOfWeek`
+4. **Mes con mayor número de ventas** — Agrupado por `DimDate.Year, Month`
+
+Todas las queries validadas end-to-end contra datos reales (2,246+ filas en `fact_sales`).
 
 ---
 
-## Backend
+## Estructura del repositorio
 
-| Tecnología | Versión | Uso |
-|---|---|---|
-| Python | 3.12 | Lenguaje base |
-| FastAPI | 0.x | Framework API REST |
-| SQLAlchemy | 2.x | ORM |
-| Pydantic | 2.x | Validación de datos |
-| PyJWT / Passlib | - | Autenticación JWT |
-| PyTest | 9.0.2 | Pruebas unitarias |
-
----
-
-## Infraestructura
-
-| Servicio | Uso |
-|---|---|
-| AWS EC2 (x2) | Hosting del Frontend y Backend |
-| AWS RDS PostgreSQL | Base de datos en subred privada |
-| GitHub Actions | Pipeline CI/CD |
-
----
-
-# 📁 Estructura del Proyecto
-
-```bash
+```
 Parcial_BigData_Corte1/
 │
-├── .github/workflows/        # Automatización CI/CD
+├── backend/                     # Parcial 1 — API FastAPI
+│   └── app/
+│       ├── models/              # SQLAlchemy ORM (Chinook + users)
+│       ├── schemas/             # Pydantic
+│       ├── routers/             # Endpoints /auth /tracks /purchase
+│       ├── services/            # Lógica de negocio
+│       └── tests/               # pytest — 23 tests
 │
-├── frontend/                 # SPA en React
-│   ├── src/
-│   │   ├── components/       # Componentes UI reutilizables
-│   │   ├── pages/            # Vistas principales
-│   │   ├── services/         # Clientes de API
-│   │   └── tests/            # Pruebas de componentes
-│   │
-│   └── vite.config.js
+├── frontend/                    # Parcial 1 — SPA React + Vite
+│   └── src/
+│       ├── pages/               # Home, Tracks, Purchase, Admin, etc.
+│       ├── components/          # Navbar, Cart, etc.
+│       ├── services/api.js      # Cliente Axios
+│       └── tests/               # Vitest — 14 tests
 │
-├── backend/                  # API RESTful
-│   ├── app/
-│   │   ├── models/           # Entidades de base de datos
-│   │   ├── schemas/          # Validaciones Pydantic
-│   │   ├── routers/          # Endpoints
-│   │   └── tests/            # Pruebas de integración
-│   │
-│   └── requirements.txt
+├── infra/                       # Parcial 2 — Scripts boto3 de infraestructura
+│   ├── provision_infra.py       # Crea bucket S3, SG, Glue Connection, DB, Athena WG
+│   ├── deploy_jobs.py           # Sube ETLs a S3 y crea/actualiza Glue Jobs
+│   ├── create_athena_tables.py  # Ejecuta los 5 DDLs en Athena
+│   ├── schedule_jobs.py         # Crea Glue Triggers horarios
+│   ├── tear_down.py             # Elimina toda la infra analítica
+│   └── athena_ddls.sql          # CREATE EXTERNAL TABLE + MSCK REPAIR
 │
-└── Chinook_PostgreSql.sql    # Esquema de la base de datos
+├── etl/                         # Parcial 2 — Jobs ETL
+│   ├── glue_jobs/               # Glue Spark
+│   │   ├── fact_sales_etl.py
+│   │   ├── dim_customer_etl.py
+│   │   ├── dim_customer_history_etl.py
+│   │   ├── dim_track_etl.py
+│   │   ├── dim_employee_etl.py
+│   │   └── dim_employee_history_etl.py
+│   ├── python_jobs/             # Glue Python Shell
+│   │   └── dim_date_etl.py
+│   └── tests/                   # pytest — 19 tests de transformaciones
+│       ├── test_dim_date.py     # 10 tests
+│       └── test_fact_sales.py   # 9 tests
+│
+├── powerbi/                     # Parcial 2 — Dashboards
+│   └── chinook_analytics.pbix
+│
+├── docs/                        # Documentación
+│   └── arch.drawio              # Diagrama de arquitectura
+│
+├── .github/workflows/           # CI/CD
+│   ├── ci-cd.yml                # Tests en pull request
+│   ├── deploy.yml               # Deploy app a EC2
+│   └── etl-deploy.yml           # Deploy ETLs a Glue + S3
+│
+├── Chinook_PostgreSql.sql       # Schema + seed de la base Chinook
+├── requirements.txt             # Dependencias Python
+├── README.md                    # Este archivo
+└── ONBOARDING.md                # Guía completa de onboarding y re-despliegue
 ```
 
 ---
 
-# ⚙️ Funcionalidades
+## Stack tecnológico
 
-| Módulo | Descripción |
+### Parcial 1 — Aplicación
+
+| Capa | Tecnologías |
 |---|---|
-| 🔐 Auth | Registro de usuarios y login seguro con **JWT**. Manejo de roles **admin** y **usuario** |
-| 🎵 Catálogo | Buscador avanzado por **Track, Artista o Género** |
-| 🛒 Checkout | Proceso de compra con validación de cliente y generación de factura |
-| 🎨 UX/UI | Interfaz responsiva con **notificaciones en tiempo real** y **rutas protegidas** |
+| Frontend | React 18, Vite, React Router, Axios, Vitest |
+| Backend | Python 3.12, FastAPI, SQLAlchemy, Pydantic, JWT, pytest |
+| Infra | AWS EC2 (x2), AWS RDS PostgreSQL, GitHub Actions |
+
+### Parcial 2 — Analítica
+
+| Capa | Tecnologías |
+|---|---|
+| ETL | AWS Glue (Visual + Spark + Python Shell), PySpark 3.3, paquete `holidays` |
+| Storage | AWS S3 (Parquet Snappy particionado year/month/day) |
+| Query | AWS Athena + Glue Data Catalog |
+| Visualización | Power BI Desktop + driver ODBC Simba |
+| Automatización | boto3 (provision, deploy, schedule, tear down), GitHub Actions |
 
 ---
 
-# 🧪 Calidad de Software (Testing)
+## Recursos AWS desplegados
 
-Contamos con una **suite de pruebas automatizadas** que garantizan la estabilidad del sistema en cada cambio.
-
-| Capa | Casos de Prueba | Estado |
+| Recurso | Nombre | Propósito |
 |---|---|---|
-| Backend Endpoints | 11 | ✅ 100% Pass |
-| Backend Services | 12 | ✅ 100% Pass |
-| Frontend Components | 9 | ✅ 100% Pass |
-| Frontend API Service | 5 | ✅ 100% Pass |
-| **TOTAL** | **37** | 🚀 Ready for Production |
+| S3 Bucket | `chinook-datalake-academy` | Data Lake (Parquet) |
+| Glue Database | `chinook_dw` | Catálogo de tablas analíticas |
+| Glue Connection | `chinook-rds` | JDBC al RDS OLTP |
+| Glue Jobs (x7) | `fact-sales-etl`, `dim-*-etl` | ETLs Spark + Python Shell |
+| Athena Workgroup | `chinook-wg` | Motor SQL sobre S3 |
+| IAM Role | `LabRole` | Rol compartido de AWS Academy |
 
 ---
 
-# 🚀 Pipeline CI/CD
+## Modelo estrella
 
-El flujo de despliegue es **completamente automático** al realizar un `push` a la rama **main**.
+```
+              ┌───────────────┐
+              │  DimCustomer  │
+              │  CustomerKey  │
+              └───────┬───────┘
+                      │
+ ┌───────────────┐    │    ┌───────────────┐
+ │   DimTrack    │────┤────│   DimDate     │
+ │   TrackKey    │    │    │   DateKey     │
+ └───────────────┘    │    └───────────────┘
+                      │
+             ┌────────▼──────────┐
+             │    FactSales      │
+             │    ───────────    │
+             │    CustomerKey FK │
+             │    TrackKey    FK │
+             │    InvoiceDateKey │
+             │    EmployeeKey FK │
+             │    Quantity       │
+             │    UnitPrice      │
+             │    TotalAmount    │
+             └────────┬──────────┘
+                      │
+              ┌───────▼───────┐
+              │  DimEmployee  │
+              │  EmployeeKey  │
+              └───────────────┘
+```
 
-## Continuous Integration (CI)
-
-1. Instalación de dependencias (`npm install` / `pip install`)
-2. Ejecución de **linters**
-3. Ejecución de **pruebas unitarias**
+Las dimensiones `DimCustomer_History` y `DimEmployee_History` guardan snapshots diarios para análisis histórico.
 
 ---
 
-## Continuous Deployment (CD)
+## Testing
 
-=======
-1. Conexión vía **SSH** a las instancias **EC2**
-2. Actualización del código (`git pull`)
-3. Build de producción del **Frontend (React)**
-4. Reinicio de servicios **FastAPI / Gunicorn**
+Pruebas unitarias en todas las capas:
+
+| Capa | Archivo | Tests | Estado |
+|---|---|---|---|
+| Backend Endpoints | `backend/app/tests/test_endpoints.py` | 11 | ✅ |
+| Backend Services | `backend/app/tests/test_services.py` | 12 | ✅ |
+| Frontend Components | `frontend/src/tests/*.jsx` | 9 | ✅ |
+| Frontend API | `frontend/src/tests/api.test.js` | 5 | ✅ |
+| ETL DimDate | `etl/tests/test_dim_date.py` | 10 | ✅ |
+| ETL FactSales | `etl/tests/test_fact_sales.py` | 9 | ✅ |
+| **Total** | | **56** | **100%** |
+
+### Correr tests localmente
+
+```bash
+# Backend
+cd backend && pytest app/tests/ -v
+
+# Frontend
+cd frontend && npm test
+
+# ETL
+python -m venv .venv
+.venv/bin/pip install pytest pandas pyarrow holidays
+.venv/bin/python -m pytest etl/tests/ -v
+```
 
 ---
 
-# 👨‍💻 Autores
+## Pipeline CI/CD
 
-- **Alan Osorio**
-- **Daniela López**
-- **Ana Amador**
+Tres workflows independientes:
+
+| Workflow | Trigger | Qué hace |
+|---|---|---|
+| `ci-cd.yml` | PR a `main` | Corre tests backend + frontend |
+| `deploy.yml` | Push a `main` | SSH a EC2s → `git pull` → rebuild + restart |
+| `etl-deploy.yml` | Push a `main` en `etl/` o `infra/` | Tests ETL + lint. Deploy manual con `workflow_dispatch` |
+
+### Secrets requeridos en GitHub
+
+```
+# Parcial 1
+BACKEND_HOST, FRONTEND_HOST, SSH_USER, SSH_PRIVATE_KEY
+
+# Parcial 2 (AWS Academy — rotan cada 4h)
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+AWS_SESSION_TOKEN
+AWS_REGION = us-east-1
+```
 
 ---
->>>>>>> e0b8d9f (correcion de readme)
+
+## Flujo end-to-end validado
+
+1. Usuario compra canciones en la app (frontend)
+2. Backend genera `invoice` + `invoice_line` en RDS
+3. Glue Job `fact-sales-etl` lee los cambios del RDS vía JDBC
+4. Escribe Parquet en S3 particionado por year/month/day (modo overwrite)
+5. Glue Catalog registra las particiones automáticamente
+6. Athena queries retornan la compra nueva en segundos
+7. Power BI refresca dashboards con los datos actualizados
+
+Tiempo total: **~3 minutos** desde la compra hasta ver el dato en Power BI.
+
+---
+
+## Levantar la infraestructura analítica desde cero
+
+```bash
+# 1. Clonar y entrar al repo
+git clone https://github.com/Alan-Osorio01/Parcial_BigData_Corte1.git
+cd Parcial_BigData_Corte1
+
+# 2. Crear venv e instalar deps
+python3 -m venv .venv
+.venv/bin/pip install boto3 pytest pandas pyarrow holidays
+
+# 3. Configurar credenciales de AWS Academy en ~/.aws/credentials
+
+# 4. Provisionar toda la infraestructura
+.venv/bin/python infra/provision_infra.py
+
+# 5. Desplegar los 7 ETLs a Glue
+.venv/bin/python infra/deploy_jobs.py
+
+# 6. Crear las tablas en Athena
+.venv/bin/python infra/create_athena_tables.py
+
+# 7. Correr los Glue Jobs en Console → Jobs → Run
+#    Orden recomendado: DimDate → Dimensiones → FactSales
+
+# 8. Abrir powerbi/chinook_analytics.pbix en Power BI Desktop
+#    y refrescar los datos
+```
+
+Guía detallada paso a paso en [`ONBOARDING.md`](./ONBOARDING.md).
+
+---
+
+## Consideraciones de AWS Academy
+
+- Credenciales temporales (rotan cada 4h) — actualizar `~/.aws/credentials` y GitHub Secrets cuando roten
+- Usar siempre el rol `LabRole` — Academy no permite crear IAM roles nuevos
+- `fact_sales_etl.py` usa `spark.read.jdbc()` directo (sin Glue Connection Catalog) para evitar errores de resolución de conexiones en Academy
+- Modo de escritura OVERWRITE en FactSales para evitar duplicados, ya que `spark.read.jdbc` no soporta Glue Bookmarks
+
+---
+
+## Documentación adicional
+
+- [ONBOARDING.md](./ONBOARDING.md) — guía completa de onboarding, re-despliegue en nueva cuenta AWS y troubleshooting
+- [docs/arch.drawio](./docs/arch.drawio) — diagrama de arquitectura editable
+- [infra/athena_ddls.sql](./infra/athena_ddls.sql) — DDLs de las 5 tablas de Athena
+
+---
+
+## Autores
+
+- **Alan Osorio** — Infraestructura, FactSales ETL, CI/CD analítico, documentación
+- **Daniela López** — Visual ETLs (DimCustomer, DimTrack, DimEmployee) + snapshots históricos
+- **Ana Amador** — DimDate Python ETL, DDLs Athena, tests unitarios, Power BI dashboards
