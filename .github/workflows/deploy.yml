@@ -47,10 +47,24 @@ jobs:
           cd frontend
           npm test
 
+  test-etl:
+    name: 📊 Tests ETL (DimDate + FactSales)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Instalar dependencias
+        run: pip install pytest pandas pyarrow holidays boto3 -q
+      - name: Correr tests
+        run: pytest etl/tests/ -v
+
   deploy-backend:
     name: 🐍 Deploy Backend
     runs-on: ubuntu-latest
-    needs: [test-backend, test-frontend]
+    needs: [test-backend, test-frontend, test-etl]
     steps:
       - name: Checkout código
         uses: actions/checkout@v4

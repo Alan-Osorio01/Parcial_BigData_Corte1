@@ -1,4 +1,6 @@
 import sys
+import time
+import boto3
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
@@ -91,5 +93,22 @@ spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
         .option("compression", "snappy")
         .parquet(TARGET_PATH)
 )
+
+# ── 6. Refrescar particiones en el Glue Catalog (MSCK REPAIR) ────────────────
+# spark.write.parquet no actualiza el Catalog automáticamente, así que ejecutamos
+# MSCK REPAIR TABLE vía Athena para que las particiones nuevas sean visibles.
+athena = boto3.client("athena", region_name="us-east-1")
+resp = athena.start_query_execution(
+    QueryString=f"MSCK REPAIR TABLE {GLUE_DB}.fact_sales",
+    WorkGroup="chinook-wg",
+    ResultConfiguration={"OutputLocation": f"s3://{BUCKET}/athena-results/"},
+)
+qid = resp["QueryExecutionId"]
+for _ in range(30):
+    state = athena.get_query_execution(QueryExecutionId=qid)["QueryExecution"]["Status"]["State"]
+    if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
+        break
+    time.sleep(2)
+print(f"MSCK REPAIR TABLE fact_sales → {state}")
 
 job.commit()
